@@ -1,0 +1,6 @@
+{
+  "name": "SymmOrbital — Chemical Structure Sketcher, MO Diagram & Point-Group Symmetry Analyzer",
+  "description": "Draw 2D chemical structures or query PubChem to compute interactive Molecular Orbital (MO) correlation diagrams, 3D LCAO wave-function visualizations, point-group symmetry elements, and irreducible representations.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

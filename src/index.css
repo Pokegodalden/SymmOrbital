@@ -1,0 +1,281 @@
+@import "tailwindcss";
+@import "katex/dist/katex.min.css";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@layer base {
+  :root {
+    --font-sans: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+    --font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace;
+  }
+
+  body {
+    font-family: var(--font-sans);
+    background-color: #F8FAFC;
+    color: #0F172A;
+    margin: 0;
+    padding: 0;
+    overflow-x: hidden;
+    transition: background-color 150ms ease, color 150ms ease;
+  }
+
+  html.dark body {
+    background-color: #020617;
+    color: #F8FAFC;
+  }
+
+  code, pre, .font-mono {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Custom subtle scrollbars for dense scientific data panels */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #F1F5F9;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #CBD5E1;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #94A3B8;
+}
+
+html.dark ::-webkit-scrollbar-track {
+  background: #0F172A;
+}
+
+html.dark ::-webkit-scrollbar-thumb {
+  background: #334155;
+}
+
+html.dark ::-webkit-scrollbar-thumb:hover {
+  background: #475569;
+}
+
+/* ============================================================================
+   Comprehensive Scientific Dark Mode Theme Overrides (html.dark)
+   ============================================================================ */
+html.dark .bg-\[\#F8FAFC\] {
+  background-color: #020617 !important;
+}
+
+html.dark .bg-white {
+  background-color: #0F172A !important;
+}
+
+html.dark .bg-slate-50,
+html.dark .bg-slate-50\/50,
+html.dark .bg-slate-50\/70,
+html.dark .bg-slate-50\/80 {
+  background-color: #1E293B !important;
+}
+
+html.dark .bg-slate-100,
+html.dark .bg-slate-100\/60,
+html.dark .bg-slate-100\/70,
+html.dark .bg-slate-200\/70 {
+  background-color: #1E293B !important;
+}
+
+html.dark .hover\:bg-slate-50:hover,
+html.dark .hover\:bg-slate-100:hover,
+html.dark .hover\:bg-slate-200:hover {
+  background-color: #334155 !important;
+}
+
+html.dark .text-slate-900 {
+  color: #F8FAFC !important;
+}
+
+html.dark .text-slate-800 {
+  color: #F1F5F9 !important;
+}
+
+html.dark .text-slate-700 {
+  color: #E2E8F0 !important;
+}
+
+html.dark .text-slate-600 {
+  color: #CBD5E1 !important;
+}
+
+html.dark .text-slate-500 {
+  color: #94A3B8 !important;
+}
+
+html.dark .text-slate-400 {
+  color: #64748B !important;
+}
+
+html.dark .text-slate-300 {
+  color: #475569 !important;
+}
+
+/* Active dark buttons in dark mode */
+html.dark .bg-slate-900 {
+  background-color: #2563EB !important;
+  border-color: #3B82F6 !important;
+  color: #FFFFFF !important;
+}
+
+/* Borders & Dividers in dark mode */
+html.dark .border-slate-100,
+html.dark .border-slate-200,
+html.dark .border-slate-300 {
+  border-color: #334155 !important;
+}
+
+html.dark .divide-slate-100 > :not([hidden]) ~ :not([hidden]),
+html.dark .divide-slate-200 > :not([hidden]) ~ :not([hidden]) {
+  border-color: #334155 !important;
+}
+
+/* Semantic Scientific Accents in Dark Mode */
+html.dark .text-blue-700,
+html.dark .text-blue-800 {
+  color: #60A5FA !important;
+}
+
+html.dark .text-teal-700 {
+  color: #2DD4BF !important;
+}
+
+html.dark .text-amber-700,
+html.dark .text-amber-900 {
+  color: #FBBF24 !important;
+}
+
+html.dark .text-emerald-700,
+html.dark .text-emerald-800 {
+  color: #34D399 !important;
+}
+
+html.dark .text-rose-700,
+html.dark .text-rose-800 {
+  color: #FB7185 !important;
+}
+
+html.dark .bg-blue-50,
+html.dark .bg-blue-50\/40,
+html.dark .bg-blue-50\/60,
+html.dark .bg-blue-50\/90 {
+  background-color: rgba(37, 99, 235, 0.22) !important;
+}
+
+html.dark .bg-teal-50\/60,
+html.dark .bg-teal-50\/80 {
+  background-color: rgba(20, 184, 166, 0.22) !important;
+}
+
+html.dark .bg-emerald-50\/20,
+html.dark .bg-emerald-50\/30 {
+  background-color: rgba(16, 185, 129, 0.14) !important;
+}
+
+html.dark .bg-amber-50\/50 {
+  background-color: rgba(245, 158, 11, 0.16) !important;
+}
+
+html.dark .bg-rose-50 {
+  background-color: rgba(225, 29, 72, 0.2) !important;
+}
+
+/* 2D Chemical Sketcher SVG Dark Mode Adaptation */
+html.dark [data-testid="chemical-sketcher-svg"] #chem-grid path {
+  stroke: #1E293B !important;
+}
+
+html.dark [data-testid="chemical-sketcher-svg"] > line {
+  stroke: #334155 !important;
+}
+
+html.dark [data-testid="chemical-sketcher-svg"] g.cursor-pointer line[stroke="#1E293B"] {
+  stroke: #E2E8F0 !important;
+}
+
+html.dark [data-testid="chemical-sketcher-svg"] g.cursor-pointer polygon[fill="#1E293B"] {
+  fill: #E2E8F0 !important;
+}
+
+html.dark [data-testid="chemical-sketcher-svg"] g.cursor-pointer circle[fill="#FFFFFF"] {
+  fill: #0F172A !important;
+}
+
+html.dark [data-testid="chemical-sketcher-svg"] g.cursor-pointer circle[stroke="#CBD5E1"] {
+  stroke: #475569 !important;
+}
+
+html.dark [data-testid="chemical-sketcher-svg"] g.cursor-pointer text[fill="#0F172A"] {
+  fill: #F8FAFC !important;
+}
+
+html.dark [data-testid="chemical-sketcher-svg"] g.cursor-pointer text[fill="#475569"] {
+  fill: #CBD5E1 !important;
+}
+
+/* MO Correlation Diagram SVG Dark Mode Adaptation */
+html.dark [data-testid="mo-correlation-svg"] line[stroke="#E2E8F0"] {
+  stroke: #334155 !important;
+}
+
+html.dark [data-testid="mo-correlation-svg"] line[stroke="#CBD5E1"] {
+  stroke: #475569 !important;
+}
+
+html.dark [data-testid="mo-correlation-svg"] line[stroke="#475569"] {
+  stroke: #94A3B8 !important;
+}
+
+html.dark [data-testid="mo-correlation-svg"] line[stroke="#1E293B"] {
+  stroke: #E2E8F0 !important;
+}
+
+html.dark [data-testid="mo-correlation-svg"] path[stroke="#0F172A"] {
+  stroke: #F8FAFC !important;
+}
+
+html.dark [data-testid="mo-correlation-svg"] path[stroke="#1D4ED8"] {
+  stroke: #60A5FA !important;
+}
+
+html.dark [data-testid="mo-correlation-svg"] rect[fill="#EFF6FF"] {
+  fill: rgba(37, 99, 235, 0.18) !important;
+}
+
+html.dark [data-testid="mo-correlation-svg"] rect[fill="#DBEAFE"] {
+  fill: rgba(37, 99, 235, 0.28) !important;
+}
+
+html.dark [data-testid="mo-correlation-svg"] rect[fill="#CCFBF1"] {
+  fill: rgba(20, 184, 166, 0.28) !important;
+}
+
+html.dark [data-testid="mo-correlation-svg"] text[fill="#0F172A"],
+html.dark [data-testid="mo-correlation-svg"] text[fill="#334155"] {
+  fill: #F1F5F9 !important;
+}
+
+html.dark [data-testid="mo-correlation-svg"] text[fill="#1D4ED8"] {
+  fill: #60A5FA !important;
+}
+
+html.dark [data-testid="mo-correlation-svg"] text[fill="#0F766E"] {
+  fill: #2DD4BF !important;
+}
+
+html.dark [data-testid="mo-correlation-svg"] text[fill="#64748B"] {
+  fill: #94A3B8 !important;
+}

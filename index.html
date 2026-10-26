@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <script>
+      (function () {
+        try {
+          var nativeDefineProperty = Object.defineProperty;
+          function ensureWritableFetchDescriptor(target) {
+            if (!target) return;
+            var desc = Object.getOwnPropertyDescriptor(target, 'fetch');
+            if (desc && desc.configurable !== false) {
+              var currentFetch = typeof target.fetch === 'function' ? target.fetch.bind(window) : undefined;
+              nativeDefineProperty.call(Object, target, 'fetch', {
+                configurable: true,
+                enumerable: desc.enumerable !== false,
+                get: function () {
+                  return currentFetch || (desc.get ? desc.get.call(this) : desc.value);
+                },
+                set: function (fn) {
+                  if (typeof fn === 'function') {
+                    currentFetch = fn;
+                  }
+                }
+              });
+            }
+          }
+          ensureWritableFetchDescriptor(window);
+          if (typeof Window !== 'undefined' && Window.prototype) {
+            ensureWritableFetchDescriptor(Window.prototype);
+          }
+          Object.defineProperty = function (obj, prop, descriptor) {
+            if (
+              (obj === window || (typeof Window !== 'undefined' && obj === Window.prototype)) &&
+              prop === 'fetch' &&
+              descriptor &&
+              descriptor.get &&
+              !descriptor.set
+            ) {
+              var origGet = descriptor.get;
+              var customFn = null;
+              descriptor = {
+                configurable: true,
+                enumerable: descriptor.enumerable !== false,
+                get: function () {
+                  return customFn || origGet.call(this);
+                },
+                set: function (fn) {
+                  if (typeof fn === 'function') {
+                    customFn = fn;
+                  }
+                }
+              };
+            }
+            return nativeDefineProperty.call(Object, obj, prop, descriptor);
+          };
+        } catch (_e) {}
+
+        window.addEventListener(
+          'error',
+          function (event) {
+            var msg = String((event && event.message) || '');
+            var file = String((event && event.filename) || '');
+            if (
+              msg.indexOf('Cannot set property fetch') !== -1 ||
+              file.indexOf('chrome-extension://') === 0 ||
+              file.indexOf('moz-extension://') === 0
+            ) {
+              event.preventDefault();
+              event.stopImmediatePropagation();
+              return false;
+            }
+          },
+          true
+        );
+      })();
+    </script>
+    <title>SymmOrbital — Chemical Structure Sketcher, MO Diagram &amp; Point-Group Symmetry Analyzer</title>
+    <meta name="description" content="Draw 2D chemical structures or query PubChem to compute interactive Molecular Orbital (MO) correlation diagrams, 3D LCAO wave-function visualizations, point-group symmetry elements, and irreducible representations." />
+    <meta property="og:title" content="SymmOrbital — Chemical Structure Sketcher, MO Diagram &amp; Point-Group Symmetry Analyzer" />
+    <meta property="og:description" content="Draw 2D chemical structures or query PubChem to compute interactive Molecular Orbital (MO) correlation diagrams, 3D LCAO wave-function visualizations, point-group symmetry elements, and irreducible representations." />
+    <meta property="og:type" content="website" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,400;0,500;0,600;1,400&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  </head>
+  <body class="bg-[#F8FAFC] text-slate-900 antialiased selection:bg-blue-600 selection:text-white">
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+
