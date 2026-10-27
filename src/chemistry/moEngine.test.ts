@@ -48,7 +48,7 @@ test('NIST Chemistry WebBook PES & NIST CCCBDB benchmark audit achieves 100% poi
   const water = CANONICAL_MOLECULES[0];
   const audit = evaluateEngineAgainstBenchmarks(water);
 
-  assert.equal(audit.rows.length, 11);
+  assert.equal(audit.rows.length, 16);
   assert.equal(audit.pointGroupAccuracyPercent, 100);
   assert.ok(
     audit.meanAbsoluteErrorCalibratedEv < 0.05,
@@ -70,9 +70,14 @@ test('NIST Chemistry WebBook PES & NIST CCCBDB benchmark audit achieves 100% poi
   assert.equal(-noRow.calibratedHomoEnergyEv, 9.26);
   assert.equal(noRow.nistWebBookIpEv, 9.26);
   assert.equal(NIST_CCCBDB_BENCHMARKS.NO.experimentalPointGroup, 'C∞v');
+
+  // Verify Xenon Hexafluoride (XeF6) matches C3v monocapped octahedron and NIST PES IP1 = 12.19 eV
+  const xef6Row = audit.rows.find((r) => r.formula === 'XeF6')!;
+  assert.equal(xef6Row.detectedPointGroup, 'C3v');
+  assert.equal(-xef6Row.calibratedHomoEnergyEv, 12.19);
 });
 
-test('Point group detection and edge-case implicit-H rules preserve CO, NO, NO2, O3, SO2, N2, and O2 without mutating into hydrides', () => {
+test('Point group detection, VSEPR 3D reconstruction, and edge-case implicit-H rules preserve CO, NO, NO2, O3, SO2, XeF6, XeF4, SF4, ClF3, and PF5', () => {
   const expected: Record<string, string> = {
     H2O: 'C2v',
     NH3: 'C3v',
@@ -85,6 +90,11 @@ test('Point group detection and edge-case implicit-H rules preserve CO, NO, NO2,
     SF6: 'Oh',
     CO: 'Cinfv',
     NO: 'Cinfv',
+    XeF6: 'C3v',
+    XeF4: 'D4h',
+    SF4: 'C2v',
+    ClF3: 'C2v',
+    PF5: 'D3h',
   };
 
   for (const mol of CANONICAL_MOLECULES) {

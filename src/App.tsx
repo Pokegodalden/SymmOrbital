@@ -45,13 +45,34 @@ import {
   Table2,
 } from 'lucide-react';
 
-type PresetCategory = 'all' | 'diatomics' | 'vsepr' | 'pi';
+type PresetCategory = 'all' | 'hypervalent' | 'diatomics' | 'vsepr' | 'pi';
 type BottomDockTab = 'symmetry' | 'audit' | 'pubchem' | 'all';
 
 const PRESET_CATEGORIES: Record<PresetCategory, { label: string; formulas: string[] }> = {
   all: {
-    label: 'All Benchmarks (11)',
-    formulas: ['H2O', 'NH3', 'C6H6', 'CH4', 'C2H4', 'CH2O', 'CO2', 'BF3', 'SF6', 'CO', 'NO'],
+    label: 'All Benchmarks (16)',
+    formulas: [
+      'H2O',
+      'NH3',
+      'C6H6',
+      'CH4',
+      'C2H4',
+      'CH2O',
+      'CO2',
+      'BF3',
+      'SF6',
+      'CO',
+      'NO',
+      'XeF6',
+      'XeF4',
+      'SF4',
+      'ClF3',
+      'PF5',
+    ],
+  },
+  hypervalent: {
+    label: 'Hypervalent & Lone-Pair VSEPR',
+    formulas: ['XeF6', 'XeF4', 'SF4', 'ClF3', 'PF5', 'SF6'],
   },
   diatomics: {
     label: 'Diatomics & Radicals',
@@ -59,7 +80,7 @@ const PRESET_CATEGORIES: Record<PresetCategory, { label: string; formulas: strin
   },
   vsepr: {
     label: 'Main-Group VSEPR',
-    formulas: ['H2O', 'NH3', 'CH4', 'BF3', 'SF6'],
+    formulas: ['H2O', 'NH3', 'CH4', 'BF3', 'PF5', 'SF6'],
   },
   pi: {
     label: 'Conjugated π-Systems',
@@ -393,7 +414,7 @@ export default function App() {
               }`}
             >
               <FlaskConical className="w-3.5 h-3.5" />
-              <span>Benchmark Molecules (11)</span>
+              <span>Benchmark Molecules ({CANONICAL_MOLECULES.length})</span>
               {benchmarksExpanded ? (
                 <ChevronUp className="w-4 h-4" />
               ) : (
@@ -716,7 +737,10 @@ export default function App() {
                       {pubchemProfile.title} ({pubchemProfile.iupacName})
                     </strong>
                     <span className="text-[11px] text-slate-500 font-mono mt-1 block">
-                      Provenance: Experimentally determined / PubChem PUG REST
+                      3D Geometry:{' '}
+                      {pubchemProfile.conformerType === '3D-SDF'
+                        ? 'PubChem MMFF94s 3D-SDF Conformer'
+                        : '2D-SDF → 3D VSEPR Reconstructed'}
                     </span>
                   </div>
                   <div>

@@ -376,9 +376,316 @@ export function jacobiEigenvalues(matrix: number[][]): {
 }
 
 /**
- * Determines the molecular Point Group from atomic composition, bond connectivity, and 2D/3D geometry.
+ * Computes the number of non-bonding lone pairs (m in AX_nE_m VSEPR notation)
+ * on a central atom from its valence electron count, bond orders, and charge.
  */
-export function detectPointGroup(atoms: AtomNode[], bonds: BondEdge[]): string {
+export function getCentralAtomLonePairs(
+  centerAtom: AtomNode,
+  atoms: AtomNode[],
+  bonds: BondEdge[],
+  charge = 0
+): number {
+  const connected = bonds.filter(
+    (b) => b.source === centerAtom.id || b.target === centerAtom.id
+  );
+  let effectiveBondOrderSum = 0;
+  for (const b of connected) {
+    const otherId = b.source === centerAtom.id ? b.target : b.source;
+    const other = atoms.find((a) => a.id === otherId);
+    const otherDeg = other
+      ? bonds.filter((eb) => eb.source === other.id || eb.target === other.id).length
+      : 1;
+    // Terminal oxo/sulfido ligands (e.g. SO2, SO3, XeOF4, POCl3) require 2 valence electrons
+    // from the central atom even when a 2D SDF encodes a dative single bond.
+    if (other && otherDeg === 1 && (other.element === 'O' || other.element === 'S')) {
+      effectiveBondOrderSum += Math.max(b.order, 2);
+    } else {
+      effectiveBondOrderSum += b.order;
+    }
+  }
+
+  const valence = ELEMENT_PROPERTIES[centerAtom.element]?.valenceElectrons ?? 4;
+  const nonBondingElectrons = Math.max(0, valence - effectiveBondOrderSum - charge);
+  return Math.floor(nonBondingElectrons / 2);
+}
+
+/**
+ * Reconstructs authentic 3D VSEPR coordinates (x3d, y3d, z3d) when a molecule
+ * is drawn on the flat 2D Sketcher canvas or loaded from a PubChem 2D-SDF fallback
+ * (where all z3d ≈ 0), while preserving genuine 3D conformer coordinates when present.
+ */
+export function reconstruct3DGeometryFromVSEPR(
+  atoms: AtomNode[],
+  bonds: BondEdge[],
+  charge = 0
+): AtomNode[] {
+  if (atoms.length === 0) return [];
+
+  // Center 2D coordinates around 2D centroid
+  const cx2d = atoms.reduce((s, a) => s + a.x2d, 0) / atoms.length;
+  const cy2d = atoms.reduce((s, a) => s + a.y2d, 0) / atoms.length;
+
+  // Check if genuine 3D depth already exists (e.g. from PubChem 3D-SDF or 3D preset)
+  const maxAbsZ = atoms.reduce((m, a) => Math.max(m, Math.abs(a.z3d || 0)), 0);
+  if (maxAbsZ > 0.08) {
+    const cx3d = atoms.reduce((s, a) => s + a.x3d, 0) / atoms.length;
+    const cy3d = atoms.reduce((s, a) => s + a.y3d, 0) / atoms.length;
+    const cz3d = atoms.reduce((s, a) => s + a.z3d, 0) / atoms.length;
+    return atoms.map((a) => ({
+      ...a,
+      x2d: Number((a.x2d - cx2d).toFixed(2)),
+      y2d: Number((a.y2d - cy2d).toFixed(2)),
+      x3d: Number((a.x3d - cx3d).toFixed(3)),
+      y3d: Number((a.y3d - cy3d).toFixed(3)),
+      z3d: Number((a.z3d - cz3d).toFixed(3)),
+    }));
+  }
+
+  // Check if molecule has a central atom bonded to all other n = atoms.length - 1 ligands
+  const nLig = atoms.length - 1;
+  const centerAtom =
+    atoms.length >= 3 && atoms.length <= 7
+      ? atoms.find((a) => {
+          const deg = bonds.filter((b) => b.source === a.id || b.target === a.id).length;
+          return deg === nLig;
+        })
+      : undefined;
+
+  if (centerAtom && nLig >= 2 && nLig <= 6) {
+    const ligands = atoms.filter((a) => a.id !== centerAtom.id);
+    const lonePairs = getCentralAtomLonePairs(centerAtom, atoms, bonds, charge);
+    const rCenter = ELEMENT_PROPERTIES[centerAtom.element]?.covalentRadius ?? 0.8;
+    const getBondLen = (lig: AtomNode) =>
+      Number(((rCenter + (ELEMENT_PROPERTIES[lig.element]?.covalentRadius ?? 0.72)) * 0.96).toFixed(2));
+
+    const coords3D = new Map<string, [number, number, number]>();
+    coords3D.set(centerAtom.id, [0, 0, 0]);
+
+    if (nLig === 2) {
+      const r1 = getBondLen(ligands[0]);
+      const r2 = getBondLen(ligands[1]);
+      // AX2E0 (CO2, BeF2) or AX2E3 (XeF2) -> Linear along x-axis
+      if (lonePairs === 0 || lonePairs >= 3) {
+        coords3D.set(ligands[0].id, [-r1, 0, 0]);
+        coords3D.set(ligands[1].id, [r2, 0, 0]);
+      } else {
+        // AX2E1 (SO2, O3) or AX2E2 (H2O, OF2, SCl2) -> Bent in xy plane
+        const halfAngle = ((lonePairs === 1 ? 59.5 : 52.25) * Math.PI) / 180;
+        coords3D.set(centerAtom.id, [0, 0.32, 0]);
+        coords3D.set(ligands[0].id, [
+          Number((-r1 * Math.sin(halfAngle)).toFixed(3)),
+          Number((0.32 - r1 * Math.cos(halfAngle)).toFixed(3)),
+          0,
+        ]);
+        coords3D.set(ligands[1].id, [
+          Number((r2 * Math.sin(halfAngle)).toFixed(3)),
+          Number((0.32 - r2 * Math.cos(halfAngle)).toFixed(3)),
+          0,
+        ]);
+      }
+    } else if (nLig === 3) {
+      if (lonePairs === 0) {
+        // AX3E0 (BF3, SO3, BCl3) -> Trigonal planar in xy plane (z = 0)
+        ligands.forEach((lig, idx) => {
+          const r = getBondLen(lig);
+          const phi = Math.PI / 2 + (idx * 2 * Math.PI) / 3;
+          coords3D.set(lig.id, [
+            Number((r * Math.cos(phi)).toFixed(3)),
+            Number((r * Math.sin(phi)).toFixed(3)),
+            0,
+          ]);
+        });
+      } else if (lonePairs === 1) {
+        // AX3E1 (NH3, PCl3, NF3) -> Trigonal pyramidal (C3v with C3 along y-axis)
+        coords3D.set(centerAtom.id, [0, 0.38, 0]);
+        ligands.forEach((lig, idx) => {
+          const r = getBondLen(lig);
+          const rProj = r * 0.92;
+          const phi = Math.PI / 2 + (idx * 2 * Math.PI) / 3;
+          coords3D.set(lig.id, [
+            Number((rProj * Math.cos(phi)).toFixed(3)),
+            -0.18,
+            Number((rProj * Math.sin(phi)).toFixed(3)),
+          ]);
+        });
+      } else {
+        // AX3E2 (ClF3, BrF3) -> T-shaped (C2v with equatorial stem along -y and axial along ±x)
+        const rEq = getBondLen(ligands[0]);
+        const rAx1 = getBondLen(ligands[1]) * 1.05;
+        const rAx2 = getBondLen(ligands[2]) * 1.05;
+        coords3D.set(centerAtom.id, [0, 0.2, 0]);
+        coords3D.set(ligands[0].id, [0, Number((0.2 - rEq).toFixed(3)), 0]);
+        coords3D.set(ligands[1].id, [Number((-rAx1).toFixed(3)), 0.12, 0]);
+        coords3D.set(ligands[2].id, [Number(rAx2.toFixed(3)), 0.12, 0]);
+      }
+    } else if (nLig === 4) {
+      if (lonePairs === 0) {
+        // AX4E0 (CH4, CCl4, SiF4, POCl3) -> Tetrahedral (Td / C3v)
+        const tetDirs: [number, number, number][] = [
+          [0.8165, 0.5774, 0],
+          [-0.8165, 0.5774, 0],
+          [0, -0.5774, 0.8165],
+          [0, -0.5774, -0.8165],
+        ];
+        ligands.forEach((lig, idx) => {
+          const r = getBondLen(lig);
+          const d = tetDirs[idx];
+          coords3D.set(lig.id, [
+            Number((r * d[0]).toFixed(3)),
+            Number((r * d[1]).toFixed(3)),
+            Number((r * d[2]).toFixed(3)),
+          ]);
+        });
+      } else if (lonePairs === 1) {
+        // AX4E1 (SF4, SeF4, TeCl4) -> Seesaw / Disphenoidal (C2v: 2 eq in xy, 2 ax along ±z)
+        const rEq = getBondLen(ligands[0]);
+        const rAx = getBondLen(ligands[2]) * 1.06;
+        const eqAngle = (50.8 * Math.PI) / 180;
+        coords3D.set(centerAtom.id, [0, 0.25, 0]);
+        coords3D.set(ligands[0].id, [
+          Number((-rEq * Math.sin(eqAngle)).toFixed(3)),
+          Number((0.25 - rEq * Math.cos(eqAngle)).toFixed(3)),
+          0,
+        ]);
+        coords3D.set(ligands[1].id, [
+          Number((rEq * Math.sin(eqAngle)).toFixed(3)),
+          Number((0.25 - rEq * Math.cos(eqAngle)).toFixed(3)),
+          0,
+        ]);
+        coords3D.set(ligands[2].id, [0, 0.14, Number(rAx.toFixed(3))]);
+        coords3D.set(ligands[3].id, [0, 0.14, Number((-rAx).toFixed(3))]);
+      } else {
+        // AX4E2 (XeF4) -> Square planar in xy plane (D4h, z = 0)
+        const sqDirs: [number, number, number][] = [
+          [1, 0, 0],
+          [-1, 0, 0],
+          [0, 1, 0],
+          [0, -1, 0],
+        ];
+        ligands.forEach((lig, idx) => {
+          const r = getBondLen(lig);
+          const d = sqDirs[idx];
+          coords3D.set(lig.id, [
+            Number((r * d[0]).toFixed(3)),
+            Number((r * d[1]).toFixed(3)),
+            0,
+          ]);
+        });
+      }
+    } else if (nLig === 5) {
+      if (lonePairs === 0) {
+        // AX5E0 (PF5, PCl5) -> Trigonal bipyramidal (D3h: 3 eq in xy, 2 ax along ±z)
+        for (let i = 0; i < 3; i++) {
+          const rEq = getBondLen(ligands[i]);
+          const phi = Math.PI / 2 + (i * 2 * Math.PI) / 3;
+          coords3D.set(ligands[i].id, [
+            Number((rEq * Math.cos(phi)).toFixed(3)),
+            Number((rEq * Math.sin(phi)).toFixed(3)),
+            0,
+          ]);
+        }
+        const rAx1 = getBondLen(ligands[3]) * 1.04;
+        const rAx2 = getBondLen(ligands[4]) * 1.04;
+        coords3D.set(ligands[3].id, [0, 0, Number(rAx1.toFixed(3))]);
+        coords3D.set(ligands[4].id, [0, 0, Number((-rAx2).toFixed(3))]);
+      } else {
+        // AX5E1 (BrF5, IF5, XeOF4) -> Square pyramidal (C4v: 1 axial at +y, 4 basal in xz)
+        const rAx = getBondLen(ligands[0]);
+        coords3D.set(ligands[0].id, [0, Number(rAx.toFixed(3)), 0]);
+        const basalDirs: [number, number][] = [
+          [1, 0],
+          [-1, 0],
+          [0, 1],
+          [0, -1],
+        ];
+        for (let i = 0; i < 4; i++) {
+          const lig = ligands[i + 1];
+          const rEq = getBondLen(lig);
+          coords3D.set(lig.id, [
+            Number((rEq * basalDirs[i][0]).toFixed(3)),
+            -0.18,
+            Number((rEq * basalDirs[i][1]).toFixed(3)),
+          ]);
+        }
+      }
+    } else if (nLig === 6) {
+      if (lonePairs === 0) {
+        // AX6E0 (SF6) -> Regular Octahedral (Oh)
+        const octDirs: [number, number, number][] = [
+          [0, 1, 0],
+          [0, -1, 0],
+          [-1, 0, 0],
+          [1, 0, 0],
+          [0, 0, 1],
+          [0, 0, -1],
+        ];
+        ligands.forEach((lig, idx) => {
+          const r = getBondLen(lig);
+          const d = octDirs[idx];
+          coords3D.set(lig.id, [
+            Number((r * d[0]).toFixed(3)),
+            Number((r * d[1]).toFixed(3)),
+            Number((r * d[2]).toFixed(3)),
+          ]);
+        });
+      } else {
+        // AX6E1 (XeF6) -> Distorted Monocapped Octahedron (C3v along y-axis)
+        // Upper triad pushed apart by +y lone-pair cap; lower staggered triad compressed toward -y
+        for (let i = 0; i < 3; i++) {
+          const lig = ligands[i];
+          const r = getBondLen(lig);
+          const phi = Math.PI / 2 + (i * 2 * Math.PI) / 3;
+          const rProj = r * 0.90;
+          const yUp = r * 0.44;
+          coords3D.set(lig.id, [
+            Number((rProj * Math.cos(phi)).toFixed(3)),
+            Number(yUp.toFixed(3)),
+            Number((rProj * Math.sin(phi)).toFixed(3)),
+          ]);
+        }
+        for (let i = 0; i < 3; i++) {
+          const lig = ligands[i + 3];
+          const r = getBondLen(lig) * 0.96;
+          const phi = -Math.PI / 2 + (i * 2 * Math.PI) / 3;
+          const rProj = r * 0.74;
+          const yDown = -r * 0.67;
+          coords3D.set(lig.id, [
+            Number((rProj * Math.cos(phi)).toFixed(3)),
+            Number(yDown.toFixed(3)),
+            Number((rProj * Math.sin(phi)).toFixed(3)),
+          ]);
+        }
+      }
+    }
+
+    return atoms.map((a) => {
+      const c3 = coords3D.get(a.id) || [a.x2d - cx2d, -(a.y2d - cy2d), a.z3d || 0];
+      return {
+        ...a,
+        x2d: Number((a.x2d - cx2d).toFixed(2)),
+        y2d: Number((a.y2d - cy2d).toFixed(2)),
+        x3d: c3[0],
+        y3d: c3[1],
+        z3d: c3[2],
+      };
+    });
+  }
+
+  return atoms.map((a) => ({
+    ...a,
+    x2d: Number((a.x2d - cx2d).toFixed(2)),
+    y2d: Number((a.y2d - cy2d).toFixed(2)),
+    x3d: Number((a.x2d - cx2d).toFixed(2)),
+    y3d: Number((-(a.y2d - cy2d)).toFixed(2)),
+    z3d: a.z3d || 0,
+  }));
+}
+
+/**
+ * Determines the molecular Point Group from atomic composition, bond connectivity,
+ * VSEPR central-atom lone pairs (AX_nE_m), and 2D/3D geometry.
+ */
+export function detectPointGroup(atoms: AtomNode[], bonds: BondEdge[], charge = 0): string {
   const heavy = atoms.filter((a) => a.element !== 'H');
   const nAtoms = atoms.length;
 
@@ -389,7 +696,7 @@ export function detectPointGroup(atoms: AtomNode[], bonds: BondEdge[]): string {
     return atoms[0].element === atoms[1].element ? 'Dinfh' : 'Cinfv';
   }
 
-  // Triatomic molecules (e.g., H2O, CO2, O3, SO2, HCN, OCS)
+  // Triatomic molecules (e.g., H2O, CO2, O3, SO2, XeF2, HCN, OCS)
   if (nAtoms === 3) {
     const counts: Record<string, number> = {};
     atoms.forEach((a) => {
@@ -410,27 +717,14 @@ export function detectPointGroup(atoms: AtomNode[], bonds: BondEdge[]): string {
     const others = atoms.filter((a) => a.id !== center.id);
 
     if (others.length === 2) {
-      const v1 = [
-        others[0].x3d - center.x3d || others[0].x2d - center.x2d,
-        others[0].y3d - center.y3d || others[0].y2d - center.y2d,
-        others[0].z3d - center.z3d,
-      ];
-      const v2 = [
-        others[1].x3d - center.x3d || others[1].x2d - center.x2d,
-        others[1].y3d - center.y3d || others[1].y2d - center.y2d,
-        others[1].z3d - center.z3d,
-      ];
-      const norm1 = Math.hypot(v1[0], v1[1], v1[2]) || 1;
-      const norm2 = Math.hypot(v2[0], v2[1], v2[2]) || 1;
-      const cosTheta = (v1[0] * v2[0] + v1[1] * v2[1] + v1[2] * v2[2]) / (norm1 * norm2);
-      const isLinear = cosTheta < -0.94 || (center.element === 'C' && bonds.some((b) => b.order >= 2));
+      const lonePairs = getCentralAtomLonePairs(center, atoms, bonds, charge);
+      // AX2E0 (CO2, CS2, BeF2) or AX2E3 (XeF2) are linear; AX2E1 (SO2, O3, NO2) and AX2E2 (H2O, OF2) are bent
+      const isLinearVsepr = lonePairs === 0 || lonePairs >= 3;
 
       if (others[0].element === others[1].element) {
-        // Symmetric AB2 or A3 (e.g. CO2 -> Dinfh, H2O / SO2 / O3 -> C2v)
-        return isLinear && center.element !== 'O' && center.element !== 'S' ? 'Dinfh' : 'C2v';
+        return isLinearVsepr && center.element !== 'O' && center.element !== 'S' ? 'Dinfh' : 'C2v';
       } else {
-        // Asymmetric ABC (e.g. HCN, OCS -> Cinfv, HNO -> Cs)
-        return isLinear ? 'Cinfv' : 'Cs';
+        return isLinearVsepr ? 'Cinfv' : 'Cs';
       }
     }
     return 'Cinfv';
@@ -453,37 +747,57 @@ export function detectPointGroup(atoms: AtomNode[], bonds: BondEdge[]): string {
     return 'C2v';
   }
 
-  // Central atom with N identical H ligands
-  if (heavy.length === 1) {
-    const nLigands = atoms.length - 1;
-    const centerEl = heavy[0].element;
-    if (nLigands === 3) {
-      return centerEl === 'B' ? 'D3h' : 'C3v';
-    }
-    if (nLigands === 4) {
-      return centerEl === 'Xe' ? 'D4h' : 'Td';
-    }
-    if (nLigands === 6) return 'Oh';
-  }
-
-  // Central atom surrounded by identical halogen/chalcogen ligands (BF3, PCl3, SF6, XeF4, CCl4)
+  // Central atom surrounded by nLig ligands (AX_nE_m VSEPR point-group classification)
   const centerAtom = atoms.find((a) => {
     const deg = bonds.filter((b) => b.source === a.id || b.target === a.id).length;
     return deg >= 3 && deg === atoms.length - 1;
   });
+
   if (centerAtom) {
-    const ligandElements = new Set(
-      atoms.filter((a) => a.id !== centerAtom.id).map((a) => a.element)
-    );
+    const ligands = atoms.filter((a) => a.id !== centerAtom.id);
+    const ligandElements = new Set(ligands.map((a) => a.element));
+    const nLig = ligands.length;
+    const lonePairs = getCentralAtomLonePairs(centerAtom, atoms, bonds, charge);
+
     if (ligandElements.size === 1) {
-      const nLig = atoms.length - 1;
-      if (nLig === 3) return centerAtom.element === 'B' ? 'D3h' : 'C3v';
-      if (nLig === 4) return centerAtom.element === 'Xe' ? 'D4h' : 'Td';
-      if (nLig === 6) return 'Oh';
+      if (nLig === 3) {
+        // AX3E0 (BF3, SO3) -> D3h; AX3E1 (NH3, PCl3) -> C3v; AX3E2 (ClF3) -> C2v
+        if (lonePairs === 0) return 'D3h';
+        if (lonePairs === 1) return 'C3v';
+        return 'C2v';
+      }
+      if (nLig === 4) {
+        // AX4E0 (CH4, CCl4) -> Td; AX4E1 (SF4) -> C2v; AX4E2 (XeF4) -> D4h
+        if (lonePairs === 0) return 'Td';
+        if (lonePairs === 1) return 'C2v';
+        return 'D4h';
+      }
+      if (nLig === 5) {
+        // AX5E0 (PF5, PCl5) -> D3h; AX5E1 (BrF5, IF5) -> C4v
+        return lonePairs === 0 ? 'D3h' : 'C4v';
+      }
+      if (nLig === 6) {
+        // AX6E0 (SF6) -> Oh; AX6E1 (XeF6) -> C3v (distorted monocapped octahedron)
+        return lonePairs === 0 ? 'Oh' : 'C3v';
+      }
     }
-    if (ligandElements.size === 2 && atoms.length === 4) {
-      // Planar AB2C (e.g. Formaldehyde CH2O, Phosgene COCl2) -> C2v
-      return 'C2v';
+
+    if (ligandElements.size === 2) {
+      const elemCounts = Array.from(ligandElements).map(
+        (el) => ligands.filter((l) => l.element === el).length
+      );
+      if (nLig === 3) {
+        // AX2Y: planar (CH2O, COCl2 -> C2v) vs pyramidal (SOCl2 -> Cs)
+        return lonePairs === 0 ? 'C2v' : 'Cs';
+      }
+      if (nLig === 4 && elemCounts.includes(3)) {
+        // AX3Y tetrahedral (CHCl3, POCl3 -> C3v)
+        return lonePairs === 0 ? 'C3v' : 'Cs';
+      }
+      if (nLig === 5 && elemCounts.includes(4)) {
+        // AX4Y square pyramidal (XeOF4 -> C4v)
+        return 'C4v';
+      }
     }
   }
 
@@ -666,24 +980,14 @@ export function analyzeMolecularGraph(
     );
   }
 
-  // 2. Otherwise, expand implicit hydrogens and run the full 4-orbital Extended Hückel LCAO-MO + Symmetry solver
+  // 2. Otherwise, expand implicit hydrogens, reconstruct 3D VSEPR coordinates if flat (z3d ≈ 0),
+  //    and run the full 4-orbital Extended Hückel LCAO-MO + Symmetry solver
   const { atoms, bonds } = expandImplicitHydrogens(rawAtoms, rawBonds);
   const { formula } = computeMolecularFormula(atoms, bonds, false);
   const smiles = generateSmilesFromGraph(atoms, bonds);
-  const pointGroupId = detectPointGroup(atoms, bonds);
+  const centeredAtoms = reconstruct3DGeometryFromVSEPR(atoms, bonds, charge);
+  const pointGroupId = detectPointGroup(centeredAtoms, bonds, charge);
   const pg = POINT_GROUPS[pointGroupId] || POINT_GROUPS.Cs;
-
-  // Center 3D coordinates around centroid
-  const cx = atoms.reduce((s, a) => s + a.x2d, 0) / (atoms.length || 1);
-  const cy = atoms.reduce((s, a) => s + a.y2d, 0) / (atoms.length || 1);
-  const centeredAtoms: AtomNode[] = atoms.map((a) => ({
-    ...a,
-    x2d: Number((a.x2d - cx).toFixed(2)),
-    y2d: Number((a.y2d - cy).toFixed(2)),
-    x3d: Number((a.x2d - cx).toFixed(2)),
-    y3d: Number((-(a.y2d - cy)).toFixed(2)),
-    z3d: a.z3d || 0,
-  }));
 
   const { basis, eigenvalues, eigenvectors } = runExtendedHuckelSolver(centeredAtoms, bonds);
   const N = basis.length;

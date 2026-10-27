@@ -203,6 +203,38 @@ export const POINT_GROUPS: Record<string, PointGroupData> = {
     ],
   },
 
+  C4v: {
+    id: 'C4v',
+    schoenflies: 'C4v',
+    name: 'Square Pyramidal',
+    order: 8,
+    family: 'Cnv (Pyramidal / Polar)',
+    description: 'Features a 4-fold principal C4 axis, a collinear C2(=C4²) axis, two vertical mirror planes σv along the basal bonds, and two dihedral mirror planes σd bisecting the basal bonds. Classic examples: BrF5, IF5, XeOF4, SF5⁻.',
+    classes: [
+      { id: 'E', symbol: 'E', operationType: 'E', count: 1, description: 'Identity operation' },
+      { id: '2C4', symbol: '2C4(z)', operationType: 'Cn', count: 2, description: '±90° rotations around the principal z-axis' },
+      { id: 'C2', symbol: 'C2(z)', operationType: 'Cn', count: 1, description: '180° rotation around the principal z-axis' },
+      { id: '2sigma_v', symbol: '2σv', operationType: 'sigma_v', count: 2, description: 'Two vertical mirror planes containing the trans basal ligand pairs' },
+      { id: '2sigma_d', symbol: '2σd', operationType: 'sigma_d', count: 2, description: 'Two dihedral mirror planes bisecting the basal bond angles' },
+    ],
+    irreps: [
+      { symbol: 'A1', id: 'A1', dimension: 1, characters: [1, 1, 1, 1, 1], linearFunctions: ['z'], quadraticFunctions: ['x²+y²', 'z²'], orbitalBasis: 's, pz, dz²', irActive: true, ramanActive: true, description: 'Totally symmetric representation along the C4 axial bond and trans lone pair.' },
+      { symbol: 'A2', id: 'A2', dimension: 1, characters: [1, 1, 1, -1, -1], linearFunctions: ['Rz'], quadraticFunctions: [], orbitalBasis: '', irActive: false, ramanActive: false, description: 'Symmetric under C4/C2 rotations, antisymmetric under σv and σd.' },
+      { symbol: 'B1', id: 'B1', dimension: 1, characters: [1, -1, 1, 1, -1], linearFunctions: [], quadraticFunctions: ['x²-y²'], orbitalBasis: 'dx²-y²', irActive: false, ramanActive: true, description: 'Basal ligand σ-bonding symmetry matching lobes along the x and y axes.' },
+      { symbol: 'B2', id: 'B2', dimension: 1, characters: [1, -1, 1, -1, 1], linearFunctions: [], quadraticFunctions: ['xy'], orbitalBasis: 'dxy', irActive: false, ramanActive: true, description: 'In-plane dxy representation bisecting the basal bonds.' },
+      { symbol: 'E', id: 'E', dimension: 2, characters: [2, 0, -2, 0, 0], linearFunctions: ['(x, y)', '(Rx, Ry)'], quadraticFunctions: ['(xz, yz)'], orbitalBasis: '(px, py), (dxz, dyz)', irActive: true, ramanActive: true, description: 'Doubly degenerate representation spanning the basal equatorial plane.' },
+    ],
+    elements3D: [
+      { id: 'c4_z', type: 'axis', label: 'C4 (z-axis)', schoenflies: 'C4', fold: 4, axis: [0, 1, 0], color: '#2563EB', description: 'Principal 4-fold rotation axis along the axial bond' },
+      { id: 'sigma_v1', type: 'plane', label: 'σv(xz)', schoenflies: 'σv', axis: [0, 0, 1], color: '#0D9488', description: 'Vertical mirror plane containing trans basal bonds' },
+      { id: 'sigma_v2', type: 'plane', label: 'σv(yz)', schoenflies: 'σv', axis: [1, 0, 0], color: '#0D9488', description: 'Orthogonal vertical mirror plane containing trans basal bonds' },
+      { id: 'sigma_d1', type: 'plane', label: 'σd (Dihedral)', schoenflies: 'σd', axis: [0.707, 0, -0.707], color: '#D97706', description: 'Dihedral mirror plane bisecting basal bond angles' },
+    ],
+    defaultReduciblePresets: [
+      { id: 'sigma_5', label: 'Γ_σ (5 Square Pyramidal Bonds)', characters: [5, 1, 1, 3, 1], description: '1 axial (A1) + 4 basal (A1 + B1 + E) bonds decompose into Γ_σ = 2A1 + B1 + E' },
+    ],
+  },
+
   D2h: {
     id: 'D2h',
     schoenflies: 'D2h',

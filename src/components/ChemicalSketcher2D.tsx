@@ -146,6 +146,8 @@ export const ChemicalSketcher2D: React.FC<ChemicalSketcher2DProps> = ({
       if (e.key === '1') setActiveTool('bond_1');
       else if (e.key === '2') setActiveTool('bond_2');
       else if (e.key === '3') setActiveTool('bond_3');
+      else if (e.key === '4' || e.key.toLowerCase() === 'd') setActiveTool('dash');
+      else if (e.key.toLowerCase() === 'w') setActiveTool('wedge');
       else if (e.key.toLowerCase() === 'v') setActiveTool('select');
       else if (e.key === 'Backspace' || e.key === 'Delete') {
         if (hoveredAtomId) {
@@ -398,7 +400,17 @@ export const ChemicalSketcher2D: React.FC<ChemicalSketcher2DProps> = ({
       const nextOrder: 1 | 2 | 3 = b.order === 1 ? 2 : b.order === 2 ? 3 : 1;
       return { ...b, order: nextOrder, stereo: 'none' as const };
     });
-    commitGraphChange(atoms, updatedBonds);
+
+    const updatedAtoms =
+      activeTool === 'wedge' || activeTool === 'dash'
+        ? atoms.map((a) =>
+            a.id === bond.target
+              ? { ...a, z3d: activeTool === 'wedge' ? 0.65 : -0.65 }
+              : a
+          )
+        : atoms;
+
+    commitGraphChange(updatedAtoms, updatedBonds);
   };
 
   const handleMouseMove = (e: React.MouseEvent<SVGSVGElement>) => {
@@ -619,7 +631,7 @@ export const ChemicalSketcher2D: React.FC<ChemicalSketcher2DProps> = ({
               <button
                 type="button"
                 onClick={() => setActiveTool('wedge')}
-                title="Stereo Wedge Bond (+z)"
+                title="Stereo Wedge Bond (+z, Shortcut: W)"
                 className={`px-2 py-1 text-[11px] font-medium rounded transition-colors whitespace-nowrap shrink-0 ${
                   activeTool === 'wedge'
                     ? 'bg-blue-600 text-white'
@@ -627,6 +639,19 @@ export const ChemicalSketcher2D: React.FC<ChemicalSketcher2DProps> = ({
                 }`}
               >
                 ▲ Wedge
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setActiveTool('dash')}
+                title="Dashed Bond / Stereo Hash (-z, Shortcut: D or 4)"
+                className={`px-2 py-1 text-[11px] font-mono font-medium rounded transition-colors whitespace-nowrap shrink-0 ${
+                  activeTool === 'dash'
+                    ? 'bg-blue-600 text-white'
+                    : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-100'
+                }`}
+              >
+                ┄ Dash
               </button>
 
               <button
@@ -1054,7 +1079,7 @@ export const ChemicalSketcher2D: React.FC<ChemicalSketcher2DProps> = ({
             )}
           </div>
           <span className="text-[10px] text-slate-500">
-            1/2/3 Bond · C/N/O/H Element · Del Erase
+            1/2/3 Bond · D/W Dash/Wedge · C/N/O/H Element · Del Erase
           </span>
         </div>
       </div>
