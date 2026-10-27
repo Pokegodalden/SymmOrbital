@@ -29,6 +29,7 @@ import { MODiagramPanel } from './components/MODiagramPanel';
 import { OrbitalVisualizer3D } from './components/OrbitalVisualizer3D';
 import { SymmetryGroupPanel } from './components/SymmetryGroupPanel';
 import { DatabaseVerificationPanel } from './components/DatabaseVerificationPanel';
+import { SymmOrbitalLogo } from './components/SymmOrbitalLogo';
 import { AppClassicV1 } from './backup_v1/AppClassicV1';
 import {
   ChevronDown,
@@ -284,9 +285,10 @@ export default function App() {
         <div className="flex items-center gap-3 min-w-0">
           <a
             href="#top"
-            className="text-base font-bold tracking-tight text-slate-900 whitespace-nowrap shrink-0"
+            className="flex items-center gap-2.5 text-base font-bold tracking-tight text-slate-900 whitespace-nowrap shrink-0"
           >
-            SymmOrbital
+            <SymmOrbitalLogo className="w-7 h-7 shrink-0" />
+            <span>SymmOrbital</span>
           </a>
           <span className="text-slate-300" aria-hidden="true">·</span>
           <span className="hidden md:inline text-xs text-slate-500 truncate">

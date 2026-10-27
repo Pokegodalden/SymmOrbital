@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" width="120" height="120" fill="none">
+  <defs>
+    <linearGradient id="posClover" x1="20" y1="20" x2="100" y2="100" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#60A5FA" />
+      <stop offset="100%" stop-color="#2563EB" />
+    </linearGradient>
+    <linearGradient id="negClover" x1="100" y1="20" x2="20" y2="100" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FB7185" />
+      <stop offset="100%" stop-color="#E11D48" />
+    </linearGradient>
+  </defs>
+  <!-- Background Badge -->
+  <rect x="6" y="6" width="108" height="108" rx="24" fill="#0F172A" stroke="#1E293B" stroke-width="2" />
+  <!-- Orthogonal Nodal Mirror Planes (sigma_v) -->
+  <line x1="60" y1="14" x2="60" y2="106" stroke="#475569" stroke-width="1.5" stroke-dasharray="4 3" />
+  <line x1="14" y1="60" x2="106" y2="60" stroke="#475569" stroke-width="1.5" stroke-dasharray="4 3" />
+  <!-- 4-Lobed d_xy / pi* Cloverleaf Wavefunction -->
+  <!-- Top-Right Lobe (+ phase) -->
+  <path d="M60 60 C62 32, 84 18, 95 29 C106 40, 88 58, 60 60 Z" fill="url(#posClover)" stroke="#93C5FD" stroke-width="1" />
+  <!-- Bottom-Left Lobe (+ phase) -->
+  <path d="M60 60 C58 88, 36 102, 25 91 C14 80, 32 62, 60 60 Z" fill="url(#posClover)" stroke="#93C5FD" stroke-width="1" />
+  <!-- Top-Left Lobe (- phase) -->
+  <path d="M60 60 C32 58, 18 36, 29 25 C40 14, 58 32, 60 60 Z" fill="url(#negClover)" stroke="#FDA4AF" stroke-width="1" />
+  <!-- Bottom-Right Lobe (- phase) -->
+  <path d="M60 60 C88 62, 102 84, 91 95 C80 106, 62 88, 60 60 Z" fill="url(#negClover)" stroke="#FDA4AF" stroke-width="1" />
+  <!-- Central Point-Group Symmetry Diamond -->
+  <polygon points="60,49 71,60 60,71 49,60" fill="#0F172A" stroke="#F8FAFC" stroke-width="2" />
+  <circle cx="60" cy="60" r="3.5" fill="#38BDF8" />
+</svg>

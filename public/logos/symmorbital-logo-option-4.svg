@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" width="120" height="120" fill="none">
+  <!-- Background Badge -->
+  <rect x="6" y="6" width="108" height="108" rx="24" fill="#0F172A" stroke="#1E293B" stroke-width="2" />
+  <!-- Left AO Energy Rung -->
+  <line x1="16" y1="60" x2="34" y2="60" stroke="#94A3B8" stroke-width="3" stroke-linecap="round" />
+  <!-- Right AO Energy Rung -->
+  <line x1="86" y1="60" x2="104" y2="60" stroke="#94A3B8" stroke-width="3" stroke-linecap="round" />
+  <!-- Top Antibonding LUMO (psi*) Rung -->
+  <line x1="46" y1="28" x2="74" y2="28" stroke="#F59E0B" stroke-width="3.5" stroke-linecap="round" />
+  <!-- Bottom Bonding HOMO (psi) Rung -->
+  <line x1="46" y1="92" x2="74" y2="92" stroke="#3B82F6" stroke-width="3.5" stroke-linecap="round" />
+  <!-- SALC Correlation Dashed Lines Forming a Diamond -->
+  <line x1="34" y1="60" x2="46" y2="28" stroke="#475569" stroke-width="1.5" stroke-dasharray="3 3" />
+  <line x1="86" y1="60" x2="74" y2="28" stroke="#475569" stroke-width="1.5" stroke-dasharray="3 3" />
+  <line x1="34" y1="60" x2="46" y2="92" stroke="#475569" stroke-width="1.5" stroke-dasharray="3 3" />
+  <line x1="86" y1="60" x2="74" y2="92" stroke="#475569" stroke-width="1.5" stroke-dasharray="3 3" />
+  <!-- Central Dual-Phase p-Orbital Inside the Correlation Diamond -->
+  <path d="M60 60 C47 50, 47 35, 60 35 C73 35, 73 50, 60 60 Z" fill="#3B82F6" />
+  <path d="M60 60 C47 70, 47 85, 60 85 C73 85, 73 70, 60 60 Z" fill="#F43F5E" />
+  <circle cx="60" cy="60" r="3.5" fill="#F8FAFC" />
+</svg>

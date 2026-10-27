@@ -1,6 +1,6 @@
 [Simplified Usage Guide](./USAGE_GUIDE.md)
 
-# SymmOrbital
+# ![SymmOrbital Logo](./public/logo-inline.svg) SymmOrbital
 
 > **Interactive quantum chemistry workbench for 2D chemical sketching, VSEPR-aware 3D geometry reconstruction, real-time LCAO-MO energy diagrams, 3D WebGL orbital isosurfaces, and Schoenflies point-group symmetry analysis—benchmarked against NIST CCCBDB & PubChem.**
 

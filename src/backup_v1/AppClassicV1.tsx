@@ -35,6 +35,7 @@ import { MODiagramPanel } from '../components/MODiagramPanel';
 import { OrbitalVisualizer3D } from '../components/OrbitalVisualizer3D';
 import { SymmetryGroupPanel } from '../components/SymmetryGroupPanel';
 import { DatabaseVerificationPanel } from '../components/DatabaseVerificationPanel';
+import { SymmOrbitalLogo } from '../components/SymmOrbitalLogo';
 import { ExternalLink, Layers, Moon, Search, Sun } from 'lucide-react';
 
 interface AppClassicV1Props {
@@ -156,9 +157,10 @@ export function AppClassicV1({
       <header className="flex items-center justify-between gap-8 px-6 py-3.5 bg-white border-b border-slate-200 sticky top-0 z-30">
         <a
           href="#top"
-          className="text-lg font-bold tracking-tight text-slate-900 whitespace-nowrap shrink-0"
+          className="flex items-center gap-2.5 text-lg font-bold tracking-tight text-slate-900 whitespace-nowrap shrink-0"
         >
-          SymmOrbital
+          <SymmOrbitalLogo className="w-7 h-7 shrink-0" />
+          <span>SymmOrbital</span>
         </a>
 
         <nav
