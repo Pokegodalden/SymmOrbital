@@ -11,6 +11,7 @@ import {
   detectPointGroup,
   evaluateOrbitalWavefunction,
   jacobiEigenvalues,
+  reconstruct3DGeometryFromVSEPR,
 } from './moEngine.ts';
 import {
   formulaToLatex,
@@ -44,11 +45,11 @@ test('LaTeX formatting utilities convert chemical formulas, Schoenflies groups, 
   assert.ok(lcaoTex.includes('\\psi\\!\\left(1b_{1}\\right)'), `Unexpected LCAO LaTeX: ${lcaoTex}`);
 });
 
-test('NIST Chemistry WebBook PES & NIST CCCBDB benchmark audit achieves 100% point-group parity and < 0.05 eV calibrated MAE', () => {
+test('NIST Chemistry WebBook PES & NIST CCCBDB benchmark audit achieves 100% point-group parity and < 0.05 eV calibrated MAE across all 20 benchmarks', () => {
   const water = CANONICAL_MOLECULES[0];
   const audit = evaluateEngineAgainstBenchmarks(water);
 
-  assert.equal(audit.rows.length, 16);
+  assert.equal(audit.rows.length, 20);
   assert.equal(audit.pointGroupAccuracyPercent, 100);
   assert.ok(
     audit.meanAbsoluteErrorCalibratedEv < 0.05,
@@ -75,9 +76,34 @@ test('NIST Chemistry WebBook PES & NIST CCCBDB benchmark audit achieves 100% poi
   const xef6Row = audit.rows.find((r) => r.formula === 'XeF6')!;
   assert.equal(xef6Row.detectedPointGroup, 'C3v');
   assert.equal(-xef6Row.calibratedHomoEnergyEv, 12.19);
+
+  // Verify Xenon Difluoride (XeF2) matches D∞h 3c–4e benchmark (r = 1.977 Å, BO = 1.0, IP1 = 12.35 eV)
+  const xef2Row = audit.rows.find((r) => r.formula === 'XeF2')!;
+  assert.equal(xef2Row.detectedPointGroup, 'D∞h');
+  assert.equal(-xef2Row.calibratedHomoEnergyEv, 12.35);
+  assert.equal(xef2Row.computedBondLength, 1.977);
+  const xef2Mol = CANONICAL_MOLECULES.find((m) => m.formula === 'XeF2')!;
+  assert.equal(xef2Mol.bondOrder, 1.0);
+
+  // Verify Xenon Oxytetrafluoride (XeOF4) matches C4v heteroleptic AX4YE1 benchmark (r(Xe=O) = 1.703 Å, IP1 = 12.90 eV)
+  const xeof4Row = audit.rows.find((r) => r.formula === 'XeOF4')!;
+  assert.equal(xeof4Row.detectedPointGroup, 'C4v');
+  assert.equal(-xeof4Row.calibratedHomoEnergyEv, 12.90);
+  assert.equal(xeof4Row.computedBondLength, 1.703);
+
+  // Verify Dioxygen (O2) triplet diradical (1πg* SOMO pair at -12.07 eV, BO = 2.0)
+  const o2Mol = analyzeMolecularGraph(
+    CANONICAL_MOLECULES.find((m) => m.formula === 'O2')!.atoms,
+    CANONICAL_MOLECULES.find((m) => m.formula === 'O2')!.bonds
+  );
+  const o2Somos = o2Mol.molecularOrbitals.filter((m) => m.degenerateGroup === 'o2_1pig');
+  assert.equal(o2Somos.length, 2);
+  assert.equal(o2Somos[0].occupancy, 1);
+  assert.equal(o2Somos[1].occupancy, 1);
+  assert.equal(o2Mol.bondOrder, 2.0);
 });
 
-test('Point group detection, VSEPR 3D reconstruction, and edge-case implicit-H rules preserve CO, NO, NO2, O3, SO2, XeF6, XeF4, SF4, ClF3, and PF5', () => {
+test('Point group detection, VSEPR 3D reconstruction, and edge-case implicit-H rules preserve CO, NO, NO2, O3, SO2, XeF6, XeF4, XeF2, XeOF4, O2, N2, SF4, ClF3, and PF5', () => {
   const expected: Record<string, string> = {
     H2O: 'C2v',
     NH3: 'C3v',
@@ -95,6 +121,10 @@ test('Point group detection, VSEPR 3D reconstruction, and edge-case implicit-H r
     SF4: 'C2v',
     ClF3: 'C2v',
     PF5: 'D3h',
+    XeF2: 'Dinfh',
+    O2: 'Dinfh',
+    N2: 'Dinfh',
+    XeOF4: 'C4v',
   };
 
   for (const mol of CANONICAL_MOLECULES) {
@@ -167,19 +197,50 @@ test('Point group detection, VSEPR 3D reconstruction, and edge-case implicit-H r
   assert.equal(ozoneAnalyzed.formula, 'O3');
   assert.equal(ozoneAnalyzed.valenceElectrons, 18);
 
-  // Nitrogen Dioxide (NO2) radical (17 valence e-) must remain NO2 (never HNO2)
+  // Nitrogen Dioxide (NO2) radical (17 valence e-) must remain NO2 (never HNO2) AND be classified as bent C2v (never Dinfh)
   const no2Atoms = [
-    { id: 'N1', element: 'N' as const, x2d: 0, y2d: 0.35, x3d: 0, y3d: 0.35, z3d: 0 },
-    { id: 'O1', element: 'O' as const, x2d: -1.05, y2d: -0.2, x3d: -1.05, y3d: -0.2, z3d: 0 },
-    { id: 'O2', element: 'O' as const, x2d: 1.05, y2d: -0.2, x3d: 1.05, y3d: -0.2, z3d: 0 },
+    { id: 'N1', element: 'N' as const, x2d: 0, y2d: 0, x3d: 0, y3d: 0, z3d: 0 },
+    { id: 'O1', element: 'O' as const, x2d: -1.2, y2d: 0, x3d: -1.2, y3d: 0, z3d: 0 },
+    { id: 'O2', element: 'O' as const, x2d: 1.2, y2d: 0, x3d: 1.2, y3d: 0, z3d: 0 },
   ];
   const no2Bonds = [
     { id: 'b1', source: 'N1', target: 'O1', order: 2 as const },
     { id: 'b2', source: 'N1', target: 'O2', order: 1 as const },
   ];
+  assert.equal(detectPointGroup(no2Atoms, no2Bonds), 'C2v');
   const no2Analyzed = analyzeMolecularGraph(no2Atoms, no2Bonds);
   assert.equal(no2Analyzed.formula, 'NO2');
+  assert.equal(no2Analyzed.pointGroupId, 'C2v');
   assert.equal(no2Analyzed.valenceElectrons, 17);
+
+  // Xenon Oxytetrafluoride (XeOF4, AX5E1 -> C4v Square Pyramidal) must place unique Oxygen atom on axial +y axis even when drawn last in 2D
+  const xeof4Atoms = [
+    { id: 'Xe1', element: 'Xe' as const, x2d: 0, y2d: 0, x3d: 0, y3d: 0, z3d: 0 },
+    { id: 'F1', element: 'F' as const, x2d: -1.3, y2d: -0.5, x3d: -1.3, y3d: 0.5, z3d: 0 },
+    { id: 'F2', element: 'F' as const, x2d: 1.3, y2d: -0.5, x3d: 1.3, y3d: 0.5, z3d: 0 },
+    { id: 'F3', element: 'F' as const, x2d: -1.3, y2d: 0.5, x3d: -1.3, y3d: -0.5, z3d: 0 },
+    { id: 'F4', element: 'F' as const, x2d: 1.3, y2d: 0.5, x3d: 1.3, y3d: -0.5, z3d: 0 },
+    { id: 'O1', element: 'O' as const, x2d: 0, y2d: -1.4, x3d: 0, y3d: 1.4, z3d: 0 },
+  ];
+  const xeof4Bonds = [
+    { id: 'b1', source: 'Xe1', target: 'F1', order: 1 as const },
+    { id: 'b2', source: 'Xe1', target: 'F2', order: 1 as const },
+    { id: 'b3', source: 'Xe1', target: 'F3', order: 1 as const },
+    { id: 'b4', source: 'Xe1', target: 'F4', order: 1 as const },
+    { id: 'b5', source: 'Xe1', target: 'O1', order: 2 as const },
+  ];
+  const reconstructedXeOF4 = reconstruct3DGeometryFromVSEPR(xeof4Atoms, xeof4Bonds);
+  const oReconstructed = reconstructedXeOF4.find((a) => a.id === 'O1')!;
+  assert.equal(oReconstructed.x3d, 0);
+  assert.equal(oReconstructed.z3d, 0);
+  assert.ok(oReconstructed.y3d > 1.5, `Expected VSEPR-reconstructed axial O1 on +y axis, got y3d=${oReconstructed.y3d}`);
+
+  const xeof4Analyzed = analyzeMolecularGraph(xeof4Atoms, xeof4Bonds);
+  assert.equal(xeof4Analyzed.pointGroupId, 'C4v');
+  const oAtom3d = xeof4Analyzed.atoms.find((a) => a.id === 'O1')!;
+  assert.equal(oAtom3d.x3d, 0);
+  assert.equal(oAtom3d.z3d, 0);
+  assert.ok(oAtom3d.y3d > 1.5, `Expected axial O1 on +y axis, got y3d=${oAtom3d.y3d}`);
 
   // Sulfur Dioxide (SO2, 18 valence e-) must remain SO2 (never H2SO2)
   const so2Atoms = [

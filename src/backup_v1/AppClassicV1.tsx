@@ -126,16 +126,28 @@ export function AppClassicV1({
         (m) =>
           m.name.toLowerCase() === lower ||
           m.iupacName.toLowerCase() === lower ||
+          m.formula.toLowerCase() === lower ||
           m.id.toLowerCase() === lower ||
           String(m.pubchemCid) === lower
       );
 
+      if (canonical) {
+        handleSelectPresetMolecule(canonical);
+        try {
+          const profile = await lookupPubChemCompound(
+            canonical.pubchemCid ? String(canonical.pubchemCid) : q
+          );
+          setPubchemProfile(profile);
+        } catch {
+          // Keep canonical preset active even if live PubChem metadata fetch fails
+        }
+        return;
+      }
+
       const profile = await lookupPubChemCompound(q);
       setPubchemProfile(profile);
 
-      if (canonical) {
-        handleSelectPresetMolecule(canonical);
-      } else if (profile.atoms.length > 0) {
+      if (profile.atoms.length > 0) {
         setAtoms(profile.atoms);
         setBonds(profile.bonds);
         setCustomTitle(profile.title || profile.iupacName);

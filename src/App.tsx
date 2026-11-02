@@ -51,37 +51,20 @@ type BottomDockTab = 'symmetry' | 'audit' | 'pubchem' | 'all';
 
 const PRESET_CATEGORIES: Record<PresetCategory, { label: string; formulas: string[] }> = {
   all: {
-    label: 'All Benchmarks (16)',
-    formulas: [
-      'H2O',
-      'NH3',
-      'C6H6',
-      'CH4',
-      'C2H4',
-      'CH2O',
-      'CO2',
-      'BF3',
-      'SF6',
-      'CO',
-      'NO',
-      'XeF6',
-      'XeF4',
-      'SF4',
-      'ClF3',
-      'PF5',
-    ],
+    label: `All Benchmarks (${CANONICAL_MOLECULES.length})`,
+    formulas: CANONICAL_MOLECULES.map((m) => m.formula),
   },
   hypervalent: {
     label: 'Hypervalent & Lone-Pair VSEPR',
-    formulas: ['XeF6', 'XeF4', 'SF4', 'ClF3', 'PF5', 'SF6'],
+    formulas: ['XeF6', 'XeF4', 'XeF2', 'XeOF4', 'SF4', 'ClF3', 'PF5', 'SF6'],
   },
   diatomics: {
     label: 'Diatomics & Radicals',
-    formulas: ['CO', 'NO', 'CO2'],
+    formulas: ['CO', 'NO', 'O2', 'N2', 'CO2'],
   },
   vsepr: {
     label: 'Main-Group VSEPR',
-    formulas: ['H2O', 'NH3', 'CH4', 'BF3', 'PF5', 'SF6'],
+    formulas: ['H2O', 'NH3', 'CH4', 'BF3', 'PF5', 'SF6', 'XeF2', 'XeOF4'],
   },
   pi: {
     label: 'Conjugated π-Systems',
@@ -139,8 +122,8 @@ export default function App() {
   const [highlightedSymmetryElementId, setHighlightedSymmetryElementId] = useState<string | null>(null);
   const [highlightedIrrepId, setHighlightedIrrepId] = useState<string | null>(null);
 
-  // Workbench UI state (Benchmark section collapsed by default as requested)
-  const [benchmarksExpanded, setBenchmarksExpanded] = useState<boolean>(false);
+  // Workbench UI state (Benchmark section expanded so all 20 presets are immediately accessible)
+  const [benchmarksExpanded, setBenchmarksExpanded] = useState<boolean>(true);
   const [sketcherCollapsed, setSketcherCollapsed] = useState<boolean>(false);
   const [presetCategory, setPresetCategory] = useState<PresetCategory>('all');
   const [activeDockTab, setActiveDockTab] = useState<BottomDockTab>('symmetry');
@@ -174,6 +157,7 @@ export default function App() {
   }, [molecule, selectedMoId]);
 
   const filteredPresets = useMemo(() => {
+    if (presetCategory === 'all') return CANONICAL_MOLECULES;
     const allowed = PRESET_CATEGORIES[presetCategory].formulas;
     return CANONICAL_MOLECULES.filter((m) => allowed.includes(m.formula));
   }, [presetCategory]);
@@ -256,12 +240,23 @@ export default function App() {
           String(m.pubchemCid) === lower
       );
 
+      if (canonical) {
+        handleSelectPresetMolecule(canonical);
+        try {
+          const profile = await lookupPubChemCompound(
+            canonical.pubchemCid ? String(canonical.pubchemCid) : q
+          );
+          setPubchemProfile(profile);
+        } catch {
+          // Keep canonical preset active even if live PubChem metadata fetch fails
+        }
+        return;
+      }
+
       const profile = await lookupPubChemCompound(q);
       setPubchemProfile(profile);
 
-      if (canonical) {
-        handleSelectPresetMolecule(canonical);
-      } else if (profile.atoms.length > 0) {
+      if (profile.atoms.length > 0) {
         setAtoms(profile.atoms);
         setBonds(profile.bonds);
         setCustomTitle(profile.title || profile.iupacName);

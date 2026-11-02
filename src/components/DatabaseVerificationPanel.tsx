@@ -349,25 +349,23 @@ export const DatabaseVerificationPanel: React.FC<DatabaseVerificationPanelProps>
                       PubChem 3D Conformer Mean Bond Length
                     </span>
                     <strong className="text-slate-900">
-                      {pubchemProfile.averageBondLengthAngstrom
-                        ? `${pubchemProfile.averageBondLengthAngstrom.toFixed(3)} Å`
+                      {pubchemProfile.meanBondLengthAngstrom
+                        ? `${pubchemProfile.meanBondLengthAngstrom.toFixed(3)} Å`
                         : '2D Sketch Coordinates'}
                     </strong>
                   </div>
                 )}
               </div>
 
-              {pubchemProfile?.experimentalProperties &&
-                pubchemProfile.experimentalProperties.length > 0 && (
+              {pubchemProfile?.experimentalNotes &&
+                pubchemProfile.experimentalNotes.length > 0 && (
                   <div className="p-3 bg-white border border-slate-200 rounded space-y-1.5">
                     <div className="font-semibold text-slate-800">
                       Live PubChem PUG-View Experimental Properties (CID {pubchemProfile.cid})
                     </div>
                     <ul className="space-y-1 text-slate-600 font-mono text-[11px]">
-                      {pubchemProfile.experimentalProperties.map((prop, i) => (
-                        <li key={i}>
-                          <strong className="text-slate-800">{prop.name}:</strong> {prop.value}
-                        </li>
+                      {pubchemProfile.experimentalNotes.map((note: string, i: number) => (
+                        <li key={i}>{note}</li>
                       ))}
                     </ul>
                   </div>

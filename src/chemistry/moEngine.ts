@@ -406,7 +406,9 @@ export function getCentralAtomLonePairs(
 
   const valence = ELEMENT_PROPERTIES[centerAtom.element]?.valenceElectrons ?? 4;
   const nonBondingElectrons = Math.max(0, valence - effectiveBondOrderSum - charge);
-  return Math.floor(nonBondingElectrons / 2);
+  // Count both full lone pairs (2e-) and singly occupied radical orbitals (1e- SOMO, as in NO2 or ClO2)
+  // as active VSEPR non-bonding steric domains so NO2 (17e-) is bent C2v rather than linear Dinfh.
+  return Math.ceil(nonBondingElectrons / 2);
 }
 
 /**
@@ -452,11 +454,35 @@ export function reconstruct3DGeometryFromVSEPR(
       : undefined;
 
   if (centerAtom && nLig >= 2 && nLig <= 6) {
-    const ligands = atoms.filter((a) => a.id !== centerAtom.id);
+    const rawLigands = atoms.filter((a) => a.id !== centerAtom.id);
+    // Sort ligands so unique elements or higher-bond-order terminal oxo/sulfido ligands (e.g. =O in XeOF4, POCl3, SOCl2)
+    // come first (ligands[0]), ensuring they occupy the axial / unique symmetry site regardless of drawing order.
+    const elemFreq: Record<string, number> = {};
+    for (const l of rawLigands) {
+      elemFreq[l.element] = (elemFreq[l.element] || 0) + 1;
+    }
+    const getBondOrderToCenter = (lig: AtomNode) => {
+      const b = bonds.find(
+        (edge) =>
+          (edge.source === centerAtom.id && edge.target === lig.id) ||
+          (edge.target === centerAtom.id && edge.source === lig.id)
+      );
+      if (!b) return 1;
+      if (lig.element === 'O' || lig.element === 'S') return Math.max(b.order, 2);
+      return b.order;
+    };
+    const ligands = [...rawLigands].sort((a, b) => {
+      const freqDiff = (elemFreq[a.element] || 1) - (elemFreq[b.element] || 1);
+      if (freqDiff !== 0) return freqDiff; // Unique ligand (freq = 1) first
+      return getBondOrderToCenter(b) - getBondOrderToCenter(a);
+    });
+
     const lonePairs = getCentralAtomLonePairs(centerAtom, atoms, bonds, charge);
     const rCenter = ELEMENT_PROPERTIES[centerAtom.element]?.covalentRadius ?? 0.8;
+    // Hypervalent 3c-4e species (lonePairs >= 2 or nLig >= 5) have fractional bond order and slightly longer bonds
+    const scaleFactor = lonePairs >= 2 || nLig >= 5 ? 0.98 : 0.96;
     const getBondLen = (lig: AtomNode) =>
-      Number(((rCenter + (ELEMENT_PROPERTIES[lig.element]?.covalentRadius ?? 0.72)) * 0.96).toFixed(2));
+      Number(((rCenter + (ELEMENT_PROPERTIES[lig.element]?.covalentRadius ?? 0.72)) * scaleFactor).toFixed(2));
 
     const coords3D = new Map<string, [number, number, number]>();
     coords3D.set(centerAtom.id, [0, 0, 0]);
@@ -469,8 +495,14 @@ export function reconstruct3DGeometryFromVSEPR(
         coords3D.set(ligands[0].id, [-r1, 0, 0]);
         coords3D.set(ligands[1].id, [r2, 0, 0]);
       } else {
-        // AX2E1 (SO2, O3) or AX2E2 (H2O, OF2, SCl2) -> Bent in xy plane
-        const halfAngle = ((lonePairs === 1 ? 59.5 : 52.25) * Math.PI) / 180;
+        // AX2E0.5 (NO2, 134.3°), AX2E1 (SO2, O3, 119°), or AX2E2 (H2O, OF2, SCl2, 104.5°) -> Bent in xy plane
+        const totalValence = atoms.reduce(
+          (s, a) => s + (ELEMENT_PROPERTIES[a.element]?.valenceElectrons ?? 4),
+          -charge
+        );
+        const isOddElectronRadical = totalValence % 2 !== 0;
+        const halfAngleDeg = lonePairs === 1 ? (isOddElectronRadical ? 67.15 : 59.5) : 52.25;
+        const halfAngle = (halfAngleDeg * Math.PI) / 180;
         coords3D.set(centerAtom.id, [0, 0.32, 0]);
         coords3D.set(ligands[0].id, [
           Number((-r1 * Math.sin(halfAngle)).toFixed(3)),
@@ -999,19 +1031,50 @@ export function analyzeMolecularGraph(
   );
   const neutralElectrons = Math.max(1, Math.min(N * 2, rawValenceElectrons));
 
-  // Detect whether the molecule is linear along the x-axis (where both py and pz are pi-type)
+  // Detect whether the molecule is linear along the x-axis or planar in the xy-plane (z ≈ 0)
   const maxAbsY = centeredAtoms.reduce((m, a) => Math.max(m, Math.abs(a.y3d)), 0);
   const maxAbsZ = centeredAtoms.reduce((m, a) => Math.max(m, Math.abs(a.z3d)), 0);
   const isLinearAlongX = centeredAtoms.length >= 2 && maxAbsY < 0.15 && maxAbsZ < 0.15;
+  const isPlanarXY = maxAbsZ < 0.15;
 
-  // Build fragment orbitals (Left = Heavy Atom AOs, Right = Peripheral / Ligand AOs)
+  // Identify central / primary skeleton atom and peripheral ligand atom for dynamic fragment orbitals
+  const primaryAtom =
+    centeredAtoms.find((a) => {
+      const deg = bonds.filter((b) => b.source === a.id || b.target === a.id).length;
+      return deg >= 2 && deg === centeredAtoms.length - 1;
+    }) ||
+    centeredAtoms.find((a) => a.element !== 'H') ||
+    centeredAtoms[0];
+  const peripheralAtom =
+    centeredAtoms.find((a) => a.id !== primaryAtom?.id) || primaryAtom;
+
+  const primProps = ELEMENT_PROPERTIES[primaryAtom?.element || 'C'] || ELEMENT_PROPERTIES.C;
+  const periphProps = ELEMENT_PROPERTIES[peripheralAtom?.element || 'H'] || ELEMENT_PROPERTIES.H;
+  const primShell =
+    primaryAtom?.element === 'P' || primaryAtom?.element === 'S' || primaryAtom?.element === 'Cl'
+      ? '3'
+      : primaryAtom?.element === 'Xe'
+        ? '5'
+        : primaryAtom?.element === 'H'
+          ? '1'
+          : '2';
+  const periphShell =
+    peripheralAtom?.element === 'P' || peripheralAtom?.element === 'S' || peripheralAtom?.element === 'Cl'
+      ? '3'
+      : peripheralAtom?.element === 'Xe'
+        ? '5'
+        : peripheralAtom?.element === 'H'
+          ? '1'
+          : '2';
+
+  // Build dynamic fragment orbitals from actual element VSIEs
   const fragmentOrbitals: FragmentOrbital[] = [
     {
       id: 'frag_left_s',
       side: 'left',
-      label: 'Core Valence 2s',
-      fragmentName: 'Skeleton AOs',
-      energy: -21.4,
+      label: `${primaryAtom?.element || 'C'} ${primShell}s`,
+      fragmentName: `${primaryAtom?.element || 'Core'} Valence`,
+      energy: primProps.vsieS,
       irrep: pg.irreps[0]?.symbol || 'A',
       degeneracy: 1,
       electrons: 2,
@@ -1019,40 +1082,58 @@ export function analyzeMolecularGraph(
     {
       id: 'frag_left_p',
       side: 'left',
-      label: 'Valence 2p (σ / π)',
-      fragmentName: 'Skeleton AOs',
-      energy: -11.4,
+      label: `${primaryAtom?.element || 'C'} ${primShell}p (σ / π)`,
+      fragmentName: `${primaryAtom?.element || 'Core'} Valence`,
+      energy: primProps.vsieP,
       irrep: pg.irreps[Math.min(1, pg.irreps.length - 1)]?.symbol || 'B',
       degeneracy: 3,
-      electrons: 2,
+      electrons: Math.max(1, primProps.valenceElectrons - 2),
     },
     {
       id: 'frag_right_salc',
       side: 'right',
-      label: 'Ligand / Peripheral SALCs',
+      label:
+        peripheralAtom?.element === 'H'
+          ? 'Ligand H 1s SALCs'
+          : `Ligand ${peripheralAtom?.element || 'L'} ${periphShell}p SALCs`,
       fragmentName: 'Substituent SALCs',
-      energy: -13.6,
+      energy: peripheralAtom?.element === 'H' ? periphProps.vsieS : periphProps.vsieP,
       irrep: `${pg.irreps[0]?.symbol || 'A'} + ${pg.irreps[pg.irreps.length - 1]?.symbol || 'B'}`,
       degeneracy: 2,
       electrons: 2,
     },
   ];
 
-  // Select up to 8 most chemically informative frontier & valence MOs around HOMO/LUMO
+  // Select chemically informative frontier & valence MOs around HOMO/LUMO without slicing degenerate pairs
   const homoIdx = Math.max(0, Math.min(N - 1, Math.floor((neutralElectrons - 1) / 2)));
-  const startIdx = Math.max(0, homoIdx - 4);
-  const endIdx = Math.min(N - 1, homoIdx + 3);
+  let startIdx = Math.max(0, Math.min(homoIdx - 4, N - 8));
+  let endIdx = Math.min(N - 1, Math.max(homoIdx + 3, startIdx + 7));
+  if (startIdx > 0 && Math.abs(eigenvalues[startIdx] - eigenvalues[startIdx - 1]) < 0.08) {
+    startIdx -= 1;
+  }
+  if (endIdx < N - 1 && Math.abs(eigenvalues[endIdx] - eigenvalues[endIdx + 1]) < 0.08) {
+    endIdx += 1;
+  }
 
   const molecularOrbitals: MolecularOrbital[] = [];
   let remainingElectrons = Math.max(0, neutralElectrons - startIdx * 2);
 
+  // Exclude d-only Delta irreps when using an sp valence basis
+  const spIrreps = pg.irreps.filter((ir) => !ir.symbol.startsWith('Δ'));
+  const candidateIrreps = spIrreps.length > 0 ? spIrreps : pg.irreps;
+  const dim1Irreps = candidateIrreps.filter((ir) => ir.dimension === 1);
+  const dimMultiIrreps = candidateIrreps.filter((ir) => ir.dimension >= 2);
+
   for (let idx = startIdx; idx <= endIdx; idx++) {
     const energy = Number(eigenvalues[idx].toFixed(2));
     const vec = eigenvectors[idx];
+
+    // Only classify pz as pi-type if the molecule is actually planar in xy (z ≈ 0) or linear along x
     const piWeight = vec.reduce(
       (acc, c, k) =>
         acc +
-        (basis[k].orbital === 'pz' || (isLinearAlongX && basis[k].orbital === 'py')
+        ((isPlanarXY && basis[k].orbital === 'pz') ||
+        (isLinearAlongX && (basis[k].orbital === 'py' || basis[k].orbital === 'pz'))
           ? c * c
           : 0),
       0
@@ -1063,13 +1144,58 @@ export function analyzeMolecularGraph(
       remainingElectrons >= 2 ? 2 : remainingElectrons === 1 ? 1 : 0;
     remainingElectrons = Math.max(0, remainingElectrons - occ);
 
-    const irrepObj = pg.irreps[idx % pg.irreps.length] || pg.irreps[0];
+    // Compute interatomic bond overlap population across bonded pairs to classify bonding vs non-bonding vs antibonding
+    let bondPopulation = 0;
+    let signChanges = 0;
+    for (const b of bonds) {
+      let pairOverlap = 0;
+      for (let i = 0; i < N; i++) {
+        if (basis[i].atom.id !== b.source) continue;
+        for (let j = 0; j < N; j++) {
+          if (basis[j].atom.id !== b.target) continue;
+          const ci = vec[i];
+          const cj = vec[j];
+          if (Math.abs(ci * cj) < 1e-4) continue;
+          const dx = basis[j].atom.x3d - basis[i].atom.x3d;
+          const dy = basis[j].atom.y3d - basis[i].atom.y3d;
+          const dz = basis[j].atom.z3d - basis[i].atom.z3d;
+          const dist = Math.hypot(dx, dy, dz) || 1.4;
+          const dirMap: Record<'px' | 'py' | 'pz', number> = {
+            px: dx / dist,
+            py: dy / dist,
+            pz: dz / dist,
+          };
+          const oi = basis[i].orbital;
+          const oj = basis[j].orbital;
+          let sVal = 0;
+          if (oi === 's' && oj === 's') sVal = 0.32;
+          else if (oi === 's' && oj !== 's') sVal = dirMap[oj] * 0.28;
+          else if (oi !== 's' && oj === 's') sVal = -dirMap[oi] * 0.28;
+          else if (oi !== 's' && oj !== 's') {
+            const di = dirMap[oi];
+            const dj = dirMap[oj];
+            sVal = oi === oj ? di * di * 0.26 + (1 - di * di) * 0.16 : di * dj * 0.10;
+          }
+          pairOverlap += 2 * ci * cj * sVal;
+        }
+      }
+      bondPopulation += pairOverlap;
+      if (pairOverlap < -0.02) signChanges++;
+    }
+
     const bondingType: MolecularOrbital['bondingType'] =
-      energy < -14.2 ? 'bonding' : energy > -10.2 ? 'antibonding' : 'non-bonding';
+      bondPopulation > 0.045
+        ? 'bonding'
+        : bondPopulation < -0.045 || idx > homoIdx
+          ? 'antibonding'
+          : 'non-bonding';
+
     const interactionType: MolecularOrbital['interactionType'] = isPi
       ? bondingType === 'antibonding'
         ? 'π*'
-        : 'π'
+        : bondingType === 'non-bonding'
+          ? 'n (Lone Pair)'
+          : 'π'
       : bondingType === 'antibonding'
         ? 'σ*'
         : bondingType === 'non-bonding'
@@ -1087,22 +1213,49 @@ export function analyzeMolecularGraph(
       .filter((c) => Math.abs(c.coeff) >= 0.14)
       .slice(0, 8);
 
-    // Count sign changes across bonds as nodal planes
-    let signChanges = 0;
-    for (const b of bonds) {
-      const cSource = lcao.find((c) => c.atomId === b.source)?.coeff ?? 0;
-      const cTarget = lcao.find((c) => c.atomId === b.target)?.coeff ?? 0;
-      if (cSource * cTarget < -0.02) signChanges++;
-    }
-
-    // Group nearly degenerate eigenvalues into a shared degenerateGroup
+    // Group nearly degenerate eigenvalues into a shared degenerateGroup and assign consistent Mulliken irreps
     const prevMo = molecularOrbitals[molecularOrbitals.length - 1];
-    const isDegenerateWithPrev = prevMo && Math.abs(prevMo.energy - energy) < 0.08;
+    const isDegenerateWithPrev = Boolean(prevMo && Math.abs(prevMo.energy - energy) < 0.08);
+    const isDegenerateWithNext =
+      idx + 1 <= endIdx && Math.abs(eigenvalues[idx + 1] - eigenvalues[idx]) < 0.08;
+    const isDegenerate = isDegenerateWithPrev || isDegenerateWithNext;
+
     const degenerateGroup = isDegenerateWithPrev
       ? prevMo.degenerateGroup || `deg_${idx - 1}`
       : undefined;
     if (isDegenerateWithPrev && prevMo && !prevMo.degenerateGroup) {
       prevMo.degenerateGroup = degenerateGroup;
+    }
+
+    let irrepObj = candidateIrreps[0];
+    if (isDegenerateWithPrev && prevMo) {
+      irrepObj =
+        candidateIrreps.find((ir) => ir.id === prevMo.irrepId) || candidateIrreps[0];
+    } else if (isDegenerate && dimMultiIrreps.length > 0) {
+      // Check central atom participation to distinguish ungerade (central p-orbital active) vs gerade (central node)
+      const centerWeight = primaryAtom
+        ? vec.reduce((s, c, k) => s + (basis[k].atom.id === primaryAtom.id ? c * c : 0), 0)
+        : 0.5;
+      const preferUngerade = centerWeight > 0.08;
+      irrepObj =
+        dimMultiIrreps.find((ir) =>
+          preferUngerade ? ir.symbol.includes('u') : ir.symbol.includes('g')
+        ) || dimMultiIrreps[idx % dimMultiIrreps.length];
+    } else if (dim1Irreps.length > 0) {
+      const centerPWeight = primaryAtom
+        ? vec.reduce(
+            (s, c, k) =>
+              s + (basis[k].atom.id === primaryAtom.id && basis[k].orbital !== 's' ? c * c : 0),
+            0
+          )
+        : 0;
+      const preferUngeradeOrB = centerPWeight > 0.12 || signChanges % 2 === 1;
+      irrepObj =
+        dim1Irreps.find((ir) =>
+          preferUngeradeOrB
+            ? ir.symbol.includes('u') || ir.symbol.startsWith('B') || ir.symbol.includes("''")
+            : ir.symbol.includes('g') || ir.symbol.startsWith('A') || ir.symbol.includes('Σ+')
+        ) || dim1Irreps[idx % dim1Irreps.length];
     }
 
     molecularOrbitals.push({
@@ -1128,6 +1281,17 @@ export function analyzeMolecularGraph(
     });
   }
 
+  // Compute physical net bond order (accounting for 3c-4e hypervalent lone pairs when present)
+  const centerLonePairs =
+    primaryAtom && centeredAtoms.length >= 3
+      ? getCentralAtomLonePairs(primaryAtom, centeredAtoms, bonds, charge)
+      : 0;
+  const rawBondOrderSum = bonds.reduce((s, b) => s + b.order, 0);
+  const effectiveBondOrder =
+    centerLonePairs >= 2 && bonds.length >= 2
+      ? Math.max(1.0, rawBondOrderSum - Math.floor(centerLonePairs / 2))
+      : rawBondOrderSum;
+
   const entry: MoleculeEntry = {
     id: `custom_${formula}`,
     name: options?.customName || `Custom Structure (${formula})`,
@@ -1138,13 +1302,13 @@ export function analyzeMolecularGraph(
     pointGroupId: pg.id,
     schoenflies: pg.schoenflies,
     valenceElectrons: neutralElectrons,
-    bondOrder: bonds.reduce((s, b) => s + b.order, 0),
+    bondOrder: effectiveBondOrder,
     dipoleMomentDebye:
       pg.id === 'D6h' || pg.id === 'Td' || pg.id === 'Oh' || pg.id === 'Dinfh' || pg.id === 'D2h' || pg.id === 'D3h' || pg.id === 'D4h'
         ? 0.0
         : 1.42,
-    leftFragmentTitle: 'Central / Skeleton AOs',
-    rightFragmentTitle: 'Ligand / Substituent SALCs',
+    leftFragmentTitle: `Central ${primaryAtom?.element || 'Skeleton'} (${primShell}s, ${primShell}p)`,
+    rightFragmentTitle: `Peripheral ${peripheralAtom?.element || 'Ligand'} SALCs`,
     atoms: centeredAtoms,
     bonds,
     fragmentOrbitals,
