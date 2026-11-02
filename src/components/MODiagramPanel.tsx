@@ -10,7 +10,7 @@ import {
   moLabelToLatex,
   schoenfliesToLatex,
 } from '../chemistry/latexUtils';
-import { Latex, SvgMathLabel } from './Latex';
+import { ChemText, Latex, SvgMathLabel } from './Latex';
 import {
   ArrowDown,
   ArrowUp,
@@ -349,12 +349,16 @@ export const MODiagramPanel: React.FC<MODiagramPanelProps> = ({
             } p-2.5 bg-white flex flex-col justify-between min-h-0`}
           >
             <div className="flex items-center justify-between text-[11px] font-medium text-slate-500 px-2 pb-1 border-b border-slate-100 shrink-0">
-              <span className="truncate max-w-[34%]">{molecule.leftFragmentTitle}</span>
+              <span className="truncate max-w-[34%]">
+                <ChemText text={molecule.leftFragmentTitle} />
+              </span>
               <span className="text-slate-900 font-semibold whitespace-nowrap">
                 <Latex math={formulaToLatex(molecule.formula)} /> MOs (
                 <Latex math={schoenfliesToLatex(molecule.schoenflies)} />)
               </span>
-              <span className="truncate text-right max-w-[34%]">{molecule.rightFragmentTitle}</span>
+              <span className="truncate text-right max-w-[34%]">
+                <ChemText text={molecule.rightFragmentTitle} />
+              </span>
             </div>
 
             <svg

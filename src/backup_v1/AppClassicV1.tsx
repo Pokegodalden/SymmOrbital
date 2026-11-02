@@ -29,7 +29,7 @@ import {
   moLabelToLatex,
   schoenfliesToLatex,
 } from '../chemistry/latexUtils';
-import { Latex } from '../components/Latex';
+import { ChemText, Latex } from '../components/Latex';
 import { ChemicalSketcher2D } from '../components/ChemicalSketcher2D';
 import { MODiagramPanel } from '../components/MODiagramPanel';
 import { OrbitalVisualizer3D } from '../components/OrbitalVisualizer3D';
@@ -121,10 +121,14 @@ export function AppClassicV1({
     setPubchemError(null);
 
     try {
-      const lower = q.toLowerCase();
+      const lower = q.toLowerCase().replace(/^beta[\s-]+/, 'β-');
       const canonical = CANONICAL_MOLECULES.find(
         (m) =>
           m.name.toLowerCase() === lower ||
+          m.name.toLowerCase().replace('β-', 'beta-') === q.toLowerCase() ||
+          m.name.toLowerCase().replace('β-', 'beta ') === q.toLowerCase() ||
+          (q.toLowerCase() === 'atp' && m.id === 'atp') ||
+          (q.toLowerCase() === 'adenosine triphosphate' && m.id === 'atp') ||
           m.iupacName.toLowerCase() === lower ||
           m.formula.toLowerCase() === lower ||
           m.id.toLowerCase() === lower ||
@@ -267,7 +271,7 @@ export function AppClassicV1({
               <span>
                 Compound:{' '}
                 <strong className="text-slate-900">
-                  {molecule.name} (<Latex math={formulaToLatex(molecule.formula)} />)
+                  <ChemText text={molecule.name} /> (<Latex math={formulaToLatex(molecule.formula)} />)
                 </strong>
               </span>
               <span className="text-slate-300" aria-hidden="true">·</span>
@@ -330,7 +334,7 @@ export function AppClassicV1({
                       : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100 hover:text-slate-900'
                   }`}
                 >
-                  <Latex math={formulaToLatex(preset.formula)} /> ({preset.name}) ·{' '}
+                  <Latex math={formulaToLatex(preset.formula)} /> (<ChemText text={preset.name} />) ·{' '}
                   <Latex math={schoenfliesToLatex(preset.schoenflies)} />
                 </button>
               );

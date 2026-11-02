@@ -99,7 +99,7 @@ export const OrbitalVisualizer3D: React.FC<OrbitalVisualizer3DProps> = ({
     scene.background = new THREE.Color(0x0b0f19);
     scene.fog = new THREE.FogExp2(0x0b0f19, 0.035);
 
-    const camera = new THREE.PerspectiveCamera(42, width / height, 0.1, 100);
+    const camera = new THREE.PerspectiveCamera(42, width / height, 0.1, 250);
     camera.position.set(0, 2.2, 6.2);
 
     const renderer = new THREE.WebGLRenderer({
@@ -249,15 +249,19 @@ export const OrbitalVisualizer3D: React.FC<OrbitalVisualizer3DProps> = ({
 
     requestRenderRef.current = requestRender;
 
+    let lastFramedMoleculeId = '';
+    let currentCamDist = 6.2;
+
     resetCameraRef.current = (preset = 'iso') => {
+      const d = currentCamDist;
       if (preset === 'top') {
-        camera.position.set(0, 6.5, 0.01);
+        camera.position.set(0, d * 1.05, 0.01);
       } else if (preset === 'front') {
-        camera.position.set(0, 0.1, 6.5);
+        camera.position.set(0, d * 0.08, d * 1.05);
       } else if (preset === 'side') {
-        camera.position.set(6.5, 0.1, 0.01);
+        camera.position.set(d * 1.05, d * 0.08, 0.01);
       } else {
-        camera.position.set(2.2, 2.0, 5.8);
+        camera.position.set(d * 0.34, d * 0.32, d * 0.94);
       }
       controls.target.set(0, 0, 0);
       controls.update();
@@ -285,9 +289,41 @@ export const OrbitalVisualizer3D: React.FC<OrbitalVisualizer3DProps> = ({
         colorblindPalette: isCb,
       } = stateRef.current;
 
+      // Compute molecular bounding sphere radius R_mol for dynamic camera framing and stage scaling
+      const rMol = Math.max(
+        2.2,
+        ...mol.atoms.map((a) => Math.hypot(a.x3d, a.y3d, a.z3d))
+      );
+      const minY3d =
+        mol.atoms.length > 0 ? Math.min(...mol.atoms.map((a) => a.y3d)) : -1.2;
+
+      currentCamDist = Math.max(6.2, rMol * 2.1);
+      controls.maxDistance = Math.max(18, currentCamDist * 2.6);
+
+      // Scale reference floor disc & ring to match molecular footprint
+      const floorScale = Math.max(1.0, rMol / 2.6);
+      shadowDisc.scale.setScalar(floorScale);
+      floorRing.scale.setScalar(floorScale);
+      const floorY = Math.min(-2.23, minY3d - 1.35);
+      shadowDisc.position.y = floorY - 0.02;
+      floorRing.position.y = floorY;
+
       const bgHex = isDark ? 0x0b0f19 : 0xf1f5f9;
       scene.background = new THREE.Color(bgHex);
-      scene.fog = new THREE.FogExp2(bgHex, 0.032);
+      scene.fog = new THREE.FogExp2(bgHex, Math.min(0.032, 0.18 / currentCamDist));
+
+      // Auto-frame camera whenever the active molecule changes
+      const molKey = `${mol.id}_${mol.atoms.length}`;
+      if (molKey !== lastFramedMoleculeId) {
+        lastFramedMoleculeId = molKey;
+        camera.position.set(
+          currentCamDist * 0.28,
+          currentCamDist * 0.30,
+          currentCamDist * 0.95
+        );
+        controls.target.set(0, 0, 0);
+        controls.update();
+      }
 
       // 1. Build 3D Composite Atoms
       const atomGroup = new THREE.Group();
@@ -407,11 +443,17 @@ export const OrbitalVisualizer3D: React.FC<OrbitalVisualizer3DProps> = ({
         });
 
         if (mode === 'lobes' || mode === 'wireframe') {
+          const isDelocalized = mo.lcao.length > 10;
+          const delocBoost = isDelocalized ? 1.28 : 1.0;
+
           for (const term of mo.lcao) {
             const atom = mol.atoms.find((a) => a.id === term.atomId);
-            if (!atom || Math.abs(term.coeff) < 0.08) continue;
+            if (!atom || Math.abs(term.coeff) < 0.04) continue;
 
-            const weight = Math.pow(Math.abs(term.coeff), 0.72) * scaleMult;
+            const weight =
+              Math.pow(Math.abs(term.coeff), isDelocalized ? 0.58 : 0.72) *
+              scaleMult *
+              delocBoost;
             const isPositiveCoeff = term.coeff >= 0;
             const primaryMat = isPositiveCoeff ? posMat : negMat;
             const oppositeMat = isPositiveCoeff ? negMat : posMat;
@@ -477,9 +519,9 @@ export const OrbitalVisualizer3D: React.FC<OrbitalVisualizer3DProps> = ({
           // Volumetric 3D Wavefunction Point-Cloud Isosurface Sampling
           const posPoints: number[] = [];
           const negPoints: number[] = [];
-          const step = 0.28;
-          const bound = 2.6;
-          const threshold = 0.08 / Math.max(0.4, scaleMult);
+          const bound = Math.max(2.6, Math.min(15.0, rMol + 0.8));
+          const step = Math.max(0.28, bound / 9.5);
+          const threshold = (rMol > 5 ? 0.04 : 0.08) / Math.max(0.4, scaleMult);
 
           for (let x = -bound; x <= bound; x += step) {
             for (let y = -bound; y <= bound; y += step) {
@@ -496,9 +538,9 @@ export const OrbitalVisualizer3D: React.FC<OrbitalVisualizer3DProps> = ({
 
           const addCloud = (pts: number[], colorHex: number) => {
             if (pts.length === 0) return;
-            const count = Math.min(400, pts.length / 3);
+            const count = Math.min(480, pts.length / 3);
             const inst = new THREE.InstancedMesh(
-              new THREE.SphereGeometry(0.12 * scaleMult, 8, 8),
+              new THREE.SphereGeometry(0.12 * scaleMult * Math.max(1, rMol / 4), 8, 8),
               new THREE.MeshStandardMaterial({
                 color: colorHex,
                 roughness: 0.3,
@@ -524,7 +566,8 @@ export const OrbitalVisualizer3D: React.FC<OrbitalVisualizer3DProps> = ({
 
         // 4. Nodal Plane Visualization (ψ = 0 surfaces)
         if (showNodes && mo.nodalPlanes > 0) {
-          const nodePlaneGeo = new THREE.PlaneGeometry(4.2, 4.2);
+          const planeSpan = Math.max(4.2, rMol * 1.65);
+          const nodePlaneGeo = new THREE.PlaneGeometry(planeSpan, Math.min(planeSpan, 6.5));
           const nodePlaneMat = new THREE.MeshBasicMaterial({
             color: isDark ? 0x94a3b8 : 0x475569,
             transparent: true,
@@ -572,13 +615,15 @@ export const OrbitalVisualizer3D: React.FC<OrbitalVisualizer3DProps> = ({
       // 5. Render 3D Point-Group Symmetry Elements (Cn Axes, σ Mirror Planes, Inversion Center i)
       if (showSym && pg) {
         const symGroup = new THREE.Group();
+        const symAxisSpan = Math.max(4.8, rMol * 2.1);
+        const symPlaneSpan = Math.max(3.8, rMol * 1.6);
         for (const el of pg.elements3D) {
           const isHighlighted = hiSymId === el.id;
           const baseColor = new THREE.Color(el.color);
 
           if (el.type === 'axis' && el.axis) {
             const dir = new THREE.Vector3(...el.axis).normalize();
-            const axisLen = 4.8;
+            const axisLen = symAxisSpan;
             const rodGeo = new THREE.CylinderGeometry(
               isHighlighted ? 0.045 : 0.025,
               isHighlighted ? 0.045 : 0.025,
@@ -607,7 +652,7 @@ export const OrbitalVisualizer3D: React.FC<OrbitalVisualizer3DProps> = ({
             symGroup.add(tip);
           } else if (el.type === 'plane' && el.axis) {
             const normal = new THREE.Vector3(...el.axis).normalize();
-            const planeGeo = new THREE.PlaneGeometry(3.8, 3.8);
+            const planeGeo = new THREE.PlaneGeometry(symPlaneSpan, Math.min(symPlaneSpan, 6.2));
             const planeMat = new THREE.MeshBasicMaterial({
               color: baseColor,
               transparent: true,

@@ -137,14 +137,31 @@ export function parseSdfToGraph(sdfText: string): {
   const meanBondLengthAngstrom =
     bondLengthCount > 0 ? Number((bondLengthSum / bondLengthCount).toFixed(3)) : undefined;
 
-  // Keep up to 18 atoms so the MO diagram & 2D canvas remain crisp and responsive
-  if (rawAtoms.length > 18) {
-    const nonH = rawAtoms.filter((a) => a.element !== 'H').slice(0, 14);
-    const keepIds = new Set(nonH.map((a) => a.id));
-    const filteredBonds = rawBonds.filter(
-      (b) => keepIds.has(b.source) && keepIds.has(b.target)
+  // For large molecules (> 24 atoms), strip explicit C-H hydrogens (which are handled by skeletal implicit-H rules)
+  // while preserving up to 60 heavy atoms and any explicit heteroatom hydrogens (O-H, N-H, S-H, P-H).
+  if (rawAtoms.length > 24) {
+    const heavyAtoms = rawAtoms.filter((a) => a.element !== 'H').slice(0, 60);
+    const heavyIds = new Set(heavyAtoms.map((a) => a.id));
+    const heteroIds = new Set(
+      heavyAtoms.filter((a) => a.element !== 'C').map((a) => a.id)
     );
-    return { atoms: nonH, bonds: filteredBonds, meanBondLengthAngstrom };
+    const heteroHydrogens = rawAtoms.filter((a) => {
+      if (a.element !== 'H') return false;
+      return rawBonds.some(
+        (b) =>
+          (b.source === a.id && heteroIds.has(b.target)) ||
+          (b.target === a.id && heteroIds.has(b.source))
+      );
+    });
+    const keptAtoms = [...heavyAtoms, ...heteroHydrogens];
+    const keepIds = new Set(keptAtoms.map((a) => a.id));
+    const filteredBonds = rawBonds.filter(
+      (b) =>
+        keepIds.has(b.source) &&
+        keepIds.has(b.target) &&
+        (heavyIds.has(b.source) || heavyIds.has(b.target))
+    );
+    return { atoms: keptAtoms, bonds: filteredBonds, meanBondLengthAngstrom };
   }
 
   return { atoms: rawAtoms, bonds: rawBonds, meanBondLengthAngstrom };

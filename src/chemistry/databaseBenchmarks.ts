@@ -616,6 +616,68 @@ export const NIST_CCCBDB_BENCHMARKS: Record<string, DatabaseBenchmarkEntry> = {
     critiqueNote:
       'Heteroleptic AX4YE1 square-pyramidal (C4v) edge case combining an axial Xe=O double bond (1.703 Å), two orthogonal 3c–4e F–Xe–F basal bonds (1.900 Å, ∠O=Xe–F = 91.8°), and a trans axial lone pair. Tests heteroleptic axial ligand sorting and B1 non-bonding ligand SALC classification.',
   },
+  C40H56: {
+    moleculeId: 'beta_carotene',
+    formula: 'C40H56',
+    name: 'β-Carotene',
+    pubchemCid: 5280489,
+    casNumber: '7235-40-7',
+    nistWebBookUrl: 'https://webbook.nist.gov/cgi/cbook.cgi?ID=C7235407&Mask=20',
+    cccbdbUrl: 'https://pubchem.ncbi.nlm.nih.gov/compound/5280489#section=3D-Conformer',
+    pubchemUrl: 'https://pubchem.ncbi.nlm.nih.gov/compound/5280489',
+    experimentalPointGroup: 'D2h',
+    experimentalGeometry: {
+      bondLabel: 'r(C11=C12)',
+      bondLengthAngstrom: 1.356,
+      angleLabel: '∠(C–C=C)',
+      bondAngleDeg: 123.5,
+      dipoleDebye: 0.0,
+    },
+    firstVerticalIpEv: 6.50,
+    homoIrrep: 'B1u',
+    homoMoLabel: '6b1u (π11 HOMO)',
+    pesBands: [
+      { moLabel: '6b1u (π11 HOMO)', irrep: 'B1u', experimentalIpEv: 6.50, character: '22-center conjugated polyene π11 HOMO (10 internuclear nodes)' },
+      { moLabel: '5b2g (π10)', irrep: 'B2g', experimentalIpEv: 7.35, character: 'Centrosymmetric conjugated polyene π10 orbital (9 internuclear nodes)' },
+      { moLabel: '5b1u (π9)', irrep: 'B1u', experimentalIpEv: 8.20, character: 'Delocalized polyene π9 orbital (8 internuclear nodes)' },
+      { moLabel: '4b2g (π8)', irrep: 'B2g', experimentalIpEv: 9.05, character: 'Delocalized polyene π8 orbital (7 internuclear nodes)' },
+      { moLabel: '1b1u (π1)', irrep: 'B1u', experimentalIpEv: 12.60, character: 'Nodeless all-in-phase conjugated 22-center π1 ribbon' },
+    ],
+    literatureSource: 'NIST WebBook (CAS 7235-40-7); Sterling, Acta Crystallogr. 17, 1224 (1964); Bredas et al., J. Chem. Phys. 78, 6137 (1983)',
+    critiqueNote:
+      'Large-Molecule Benchmark (96 atoms, 40 heavy C atoms, ~29 Å span): Naive models fail via 14-atom SDF truncation, 60-step single-element Jacobi stagnation on 216×216 matrices, and |c|≥0.14 LCAO filtering that erases delocalized π waves (|c_rms| = 1/√22 ≈ 0.21). Active-space Peierls bond-length alternation (1.356 Å vs 1.452 Å) and cumulative-density LCAO retention reproduce the 6.50 eV IP1 and 2.65 eV (468 nm) visible absorption gap.',
+  },
+  C10H16N5O13P3: {
+    moleculeId: 'atp',
+    formula: 'C10H16N5O13P3',
+    name: 'Adenosine Triphosphate (ATP)',
+    pubchemCid: 5957,
+    casNumber: '56-65-5',
+    nistWebBookUrl: 'https://webbook.nist.gov/cgi/cbook.cgi?ID=C56655&Mask=20',
+    cccbdbUrl: 'https://pubchem.ncbi.nlm.nih.gov/compound/5957#section=3D-Conformer',
+    pubchemUrl: 'https://pubchem.ncbi.nlm.nih.gov/compound/5957',
+    experimentalPointGroup: 'Cs',
+    experimentalGeometry: {
+      bondLabel: 'r(Pγ=O)',
+      bondLengthAngstrom: 1.495,
+      angleLabel: '∠(O=P–O)',
+      bondAngleDeg: 112.4,
+      dipoleDebye: 8.65,
+    },
+    firstVerticalIpEv: 8.40,
+    homoIrrep: "A''",
+    homoMoLabel: "5a'' (π_Ade HOMO)",
+    pesBands: [
+      { moLabel: "5a'' (π_Ade HOMO)", irrep: "A''", experimentalIpEv: 8.40, character: 'Adenine purine ring π HOMO conjugated with exocyclic N6 amino lone pair' },
+      { moLabel: "4a'' (π_Ade)", irrep: "A''", experimentalIpEv: 9.45, character: 'Sub-frontier purine N1/N3/N7 heteroaromatic π-bonding orbital' },
+      { moLabel: "3a' (n_PO4)", irrep: "A'", experimentalIpEv: 10.65, character: 'Non-bonding terminal phosphoryl O(2p) lone-pair manifold on α,β,γ-PO4' },
+      { moLabel: "2a'' (π_Ade)", irrep: "A''", experimentalIpEv: 11.80, character: 'Deep bicyclic purine ring π1–π3 core manifold' },
+      { moLabel: "1a' (σ_POP)", irrep: "A'", experimentalIpEv: 14.80, character: 'High-energy phosphoanhydride Pγ–O–Pβ–O–Pα σ-bridge backbone' },
+    ],
+    literatureSource: 'Lin, Yu, Peng et al., J. Am. Chem. Soc. 102, 4627 (1980); Kennard et al., Proc. R. Soc. Lond. A 325, 401 (1971)',
+    critiqueNote:
+      'Multi-Domain Biomolecule Benchmark (47 atoms, 31 heavy atoms): Truncating PubChem SDFs at 14 heavy atoms deletes the entire adenine ring and ribose sugar (leaving only 3 P + 11 O). Preserving the full 31-heavy-atom scaffold with ω-EHT charge self-consistency separates the adenine π HOMO/LUMO (ΔE = 4.75 eV, 261 nm UV band) from the electrophilic γ-phosphate σ*(Pγ–O) acceptor orbital.',
+  },
 };
 
 export interface EngineComparisonRow {

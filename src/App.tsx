@@ -23,7 +23,7 @@ import {
   moLabelToLatex,
   schoenfliesToLatex,
 } from './chemistry/latexUtils';
-import { Latex } from './components/Latex';
+import { ChemText, Latex } from './components/Latex';
 import { ChemicalSketcher2D } from './components/ChemicalSketcher2D';
 import { MODiagramPanel } from './components/MODiagramPanel';
 import { OrbitalVisualizer3D } from './components/OrbitalVisualizer3D';
@@ -46,7 +46,7 @@ import {
   Table2,
 } from 'lucide-react';
 
-type PresetCategory = 'all' | 'hypervalent' | 'diatomics' | 'vsepr' | 'pi';
+type PresetCategory = 'all' | 'hypervalent' | 'diatomics' | 'vsepr' | 'pi' | 'large';
 type BottomDockTab = 'symmetry' | 'audit' | 'pubchem' | 'all';
 
 const PRESET_CATEGORIES: Record<PresetCategory, { label: string; formulas: string[] }> = {
@@ -68,7 +68,11 @@ const PRESET_CATEGORIES: Record<PresetCategory, { label: string; formulas: strin
   },
   pi: {
     label: 'Conjugated π-Systems',
-    formulas: ['C2H4', 'CH2O', 'C6H6'],
+    formulas: ['C2H4', 'CH2O', 'C6H6', 'C40H56'],
+  },
+  large: {
+    label: 'Large molecules',
+    formulas: ['C40H56', 'C10H16N5O13P3'],
   },
 };
 
@@ -230,10 +234,14 @@ export default function App() {
     setPubchemError(null);
 
     try {
-      const lower = q.toLowerCase();
+      const lower = q.toLowerCase().replace(/^beta[\s-]+/, 'β-');
       const canonical = CANONICAL_MOLECULES.find(
         (m) =>
           m.name.toLowerCase() === lower ||
+          m.name.toLowerCase().replace('β-', 'beta-') === q.toLowerCase() ||
+          m.name.toLowerCase().replace('β-', 'beta ') === q.toLowerCase() ||
+          (q.toLowerCase() === 'atp' && m.id === 'atp') ||
+          (q.toLowerCase() === 'adenosine triphosphate' && m.id === 'atp') ||
           m.iupacName.toLowerCase() === lower ||
           m.formula.toLowerCase() === lower ||
           m.id.toLowerCase() === lower ||
@@ -275,28 +283,33 @@ export default function App() {
   return (
     <div className="min-h-screen flex flex-col bg-[#F8FAFC] text-slate-900">
       {/* Strict 3-Zone Top Navigation Bar */}
-      <header className="flex flex-wrap items-center justify-between gap-4 px-5 py-2.5 bg-white border-b border-slate-200 sticky top-0 z-30">
+      <header className="flex flex-wrap lg:flex-nowrap items-center justify-between gap-3 px-5 py-2.5 bg-white border-b border-slate-200 sticky top-0 z-30">
         {/* Zone 1: Brand Identity */}
-        <div className="flex items-center gap-3 min-w-0">
+        <div className="flex items-center gap-2.5 min-w-0 shrink-0">
           <a
             href="#top"
-            className="flex items-center gap-2.5 text-base font-bold tracking-tight text-slate-900 whitespace-nowrap shrink-0"
+            className="flex items-center gap-2 text-base font-bold tracking-tight text-slate-900 whitespace-nowrap shrink-0"
           >
             <SymmOrbitalLogo className="w-7 h-7 shrink-0" />
             <span>SymmOrbital</span>
           </a>
-          <span className="text-slate-300" aria-hidden="true">·</span>
-          <span className="hidden md:inline text-xs text-slate-500 truncate">
-            Molecular Orbital &amp; Point-Group Symmetry Workbench
+          <span className="hidden xl:inline text-slate-300" aria-hidden="true">·</span>
+          <span className="hidden xl:inline text-xs text-slate-500 truncate max-w-[260px]">
+            MO &amp; Point-Group Symmetry Workbench
           </span>
         </div>
 
         {/* Zone 2: Active Molecule & Symmetry Summary */}
-        <div className="hidden sm:flex items-center gap-2 text-xs font-mono text-slate-700">
-          <span>
-            Compound:{' '}
-            <strong className="text-slate-900">
-              {molecule.name} (<Latex math={formulaToLatex(molecule.formula)} />)
+        <div className="hidden sm:flex items-center gap-2 text-xs font-mono text-slate-700 min-w-0 truncate">
+          <span className="inline-flex items-center gap-1 min-w-0">
+            <span>Compound:</span>
+            <strong className="text-slate-900 inline-flex items-center gap-1 min-w-0">
+              <span className="truncate max-w-[160px] xl:max-w-[220px]">
+                <ChemText text={molecule.name} />
+              </span>
+              <span className="shrink-0">
+                (<Latex math={formulaToLatex(molecule.formula)} />)
+              </span>
             </strong>
           </span>
           <span className="text-slate-300" aria-hidden="true">·</span>
@@ -451,7 +464,7 @@ export default function App() {
                             : 'text-slate-600 hover:text-slate-900'
                         }`}
                       >
-                        {PRESET_CATEGORIES[catKey].label}
+                        <ChemText text={PRESET_CATEGORIES[catKey].label} />
                       </button>
                     );
                   })}
@@ -506,7 +519,7 @@ export default function App() {
                           : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100 hover:text-slate-900'
                       }`}
                     >
-                      <Latex math={formulaToLatex(preset.formula)} /> ({preset.name}) ·{' '}
+                      <Latex math={formulaToLatex(preset.formula)} /> (<ChemText text={preset.name} />) ·{' '}
                       <Latex math={schoenfliesToLatex(preset.schoenflies)} />
                     </button>
                   );

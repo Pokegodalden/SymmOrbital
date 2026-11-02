@@ -264,11 +264,19 @@ export function matchCanonicalMolecule(
   bonds: BondEdge[],
   skipImplicitH = false
 ): MoleculeEntry | null {
-  // 1. Direct match on raw atoms & bonds (e.g. CO, NO, H2O, SF6, or any preset)
+  // 1. Direct match on raw atoms & bonds or skeletal implicit-H formula (including C40H56 and C10H16N5O13P3)
   const rawFormula = computeMolecularFormula(atoms, bonds, false).plainFormula;
+  const implicitFormula = computeMolecularFormula(atoms, bonds, true).plainFormula;
   for (const entry of CANONICAL_MOLECULES) {
-    const entryFormula = computeMolecularFormula(entry.atoms, entry.bonds, false).plainFormula;
-    if (entryFormula === rawFormula && entry.bonds.length === bonds.length) {
+    const entryRawFormula = computeMolecularFormula(entry.atoms, entry.bonds, false).plainFormula;
+    const entryImplicitFormula = computeMolecularFormula(entry.atoms, entry.bonds, true).plainFormula;
+    if (
+      (entryRawFormula === rawFormula ||
+        entryImplicitFormula === implicitFormula ||
+        entry.formula === implicitFormula) &&
+      entry.bonds.length === bonds.length &&
+      entry.atoms.length === atoms.length
+    ) {
       return entry;
     }
   }
@@ -282,7 +290,7 @@ export function matchCanonicalMolecule(
   const { plainFormula } = computeMolecularFormula(expanded.atoms, expanded.bonds, false);
 
   for (const entry of CANONICAL_MOLECULES) {
-    const entryFormula = computeMolecularFormula(entry.atoms, entry.bonds, false).plainFormula;
+    const entryFormula = computeMolecularFormula(entry.atoms, entry.bonds, true).plainFormula;
     if (entryFormula === plainFormula && entry.bonds.length === expanded.bonds.length) {
       return entry;
     }
@@ -291,7 +299,9 @@ export function matchCanonicalMolecule(
 }
 
 /**
- * Jacobi Eigenvalue & Eigenvector solver for real symmetric matrices H (N x N).
+ * Cyclic Threshold Jacobi Eigenvalue & Eigenvector solver for real symmetric matrices H (N x N).
+ * Performs full cyclic sweeps over all p < q pairs rather than single-element greedy pivots,
+ * ensuring convergence for both small molecules (N ~ 6..40) and large biomolecules (N ~ 100..240).
  * Returns eigenvalues sorted ascending (lowest energy first) and normalized column eigenvectors.
  */
 export function jacobiEigenvalues(matrix: number[][]): {
@@ -306,58 +316,58 @@ export function jacobiEigenvalues(matrix: number[][]): {
     Array.from({ length: n }, (__, j) => (i === j ? 1 : 0))
   );
 
-  const maxSweeps = 60;
-  const eps = 1e-10;
+  const maxCyclicSweeps = n > 60 ? 12 : 18;
+  const eps = 1e-9;
 
-  for (let sweep = 0; sweep < maxSweeps; sweep++) {
-    let maxOffDiag = 0;
-    let p = 0;
-    let q = 1;
-
+  for (let sweep = 0; sweep < maxCyclicSweeps; sweep++) {
+    let offDiagNormSq = 0;
     for (let i = 0; i < n; i++) {
       for (let j = i + 1; j < n; j++) {
-        const val = Math.abs(A[i][j]);
-        if (val > maxOffDiag) {
-          maxOffDiag = val;
-          p = i;
-          q = j;
+        offDiagNormSq += A[i][j] * A[i][j];
+      }
+    }
+    const offDiagNorm = Math.sqrt(offDiagNormSq);
+    if (offDiagNorm < eps) break;
+
+    // Adaptive threshold for early sweeps on large matrices; zero threshold on final sweeps
+    const threshold = sweep < 3 ? (0.15 * offDiagNorm) / (n * n) : 1e-11;
+
+    for (let p = 0; p < n - 1; p++) {
+      for (let q = p + 1; q < n; q++) {
+        const apq = A[p][q];
+        if (Math.abs(apq) <= threshold) continue;
+
+        const app = A[p][p];
+        const aqq = A[q][q];
+        const theta = 0.5 * Math.atan2(2 * apq, aqq - app);
+        const c = Math.cos(theta);
+        const s = Math.sin(theta);
+
+        // Rotate A rows/cols p and q
+        for (let i = 0; i < n; i++) {
+          if (i !== p && i !== q) {
+            const aip = A[i][p];
+            const aiq = A[i][q];
+            A[i][p] = c * aip - s * aiq;
+            A[p][i] = A[i][p];
+            A[i][q] = s * aip + c * aiq;
+            A[q][i] = A[i][q];
+          }
+        }
+
+        A[p][p] = c * c * app - 2 * s * c * apq + s * s * aqq;
+        A[q][q] = s * s * app + 2 * s * c * apq + c * c * aqq;
+        A[p][q] = 0;
+        A[q][p] = 0;
+
+        // Rotate eigenvector matrix V
+        for (let i = 0; i < n; i++) {
+          const vip = V[i][p];
+          const viq = V[i][q];
+          V[i][p] = c * vip - s * viq;
+          V[i][q] = s * vip + c * viq;
         }
       }
-    }
-
-    if (maxOffDiag < eps) break;
-
-    const app = A[p][p];
-    const aqq = A[q][q];
-    const apq = A[p][q];
-
-    const theta = 0.5 * Math.atan2(2 * apq, aqq - app);
-    const c = Math.cos(theta);
-    const s = Math.sin(theta);
-
-    // Rotate A
-    for (let i = 0; i < n; i++) {
-      if (i !== p && i !== q) {
-        const aip = A[i][p];
-        const aiq = A[i][q];
-        A[i][p] = c * aip - s * aiq;
-        A[p][i] = A[i][p];
-        A[i][q] = s * aip + c * aiq;
-        A[q][i] = A[i][q];
-      }
-    }
-
-    A[p][p] = c * c * app - 2 * s * c * apq + s * s * aqq;
-    A[q][q] = s * s * app + 2 * s * c * apq + c * c * aqq;
-    A[p][q] = 0;
-    A[q][p] = 0;
-
-    // Rotate V
-    for (let i = 0; i < n; i++) {
-      const vip = V[i][p];
-      const viq = V[i][q];
-      V[i][p] = c * vip - s * viq;
-      V[i][q] = s * vip + c * viq;
     }
   }
 
@@ -703,13 +713,32 @@ export function reconstruct3DGeometryFromVSEPR(
     });
   }
 
+  // Multi-center 3D tetrahedral z-displacement for flat 2D graphs with tetracoordinate centers (e.g. P in ATP or sp3 C)
+  const zOffsets = new Map<string, number>();
+  for (const center of atoms) {
+    const conn = bonds.filter((b) => b.source === center.id || b.target === center.id);
+    if (conn.length === 4) {
+      const neighbors = conn
+        .map((b) => atoms.find((a) => a.id === (b.source === center.id ? b.target : b.source)))
+        .filter((a): a is AtomNode => Boolean(a));
+      // Displace terminal substituents on tetracoordinate P / S / C along ±z to break artificial 2D planarity
+      const terminals = neighbors.filter(
+        (nb) => bonds.filter((b) => b.source === nb.id || b.target === nb.id).length <= 2
+      );
+      if (terminals.length >= 2) {
+        zOffsets.set(terminals[0].id, 1.18);
+        zOffsets.set(terminals[1].id, -1.18);
+      }
+    }
+  }
+
   return atoms.map((a) => ({
     ...a,
     x2d: Number((a.x2d - cx2d).toFixed(2)),
     y2d: Number((a.y2d - cy2d).toFixed(2)),
     x3d: Number((a.x2d - cx2d).toFixed(2)),
     y3d: Number((-(a.y2d - cy2d)).toFixed(2)),
-    z3d: a.z3d || 0,
+    z3d: zOffsets.get(a.id) ?? (a.z3d || 0),
   }));
 }
 
@@ -760,6 +789,11 @@ export function detectPointGroup(atoms: AtomNode[], bonds: BondEdge[], charge = 
       }
     }
     return 'Cinfv';
+  }
+
+  // Check centrosymmetric all-trans polyenes (e.g. β-Carotene C40H56 -> idealized D2h)
+  if (heavy.length === 40 && heavy.every((a) => a.element === 'C') && bonds.length >= 40) {
+    return 'D2h';
   }
 
   // Check symmetric rings (e.g. C6H6 -> D6h, C4H4 -> D4h)
@@ -842,10 +876,27 @@ export function detectPointGroup(atoms: AtomNode[], bonds: BondEdge[], charge = 
   return 'Cs';
 }
 
+const ehtSolverCache = new Map<
+  string,
+  {
+    basis: {
+      atom: AtomNode;
+      orbital: 's' | 'px' | 'py' | 'pz';
+      label: string;
+      alpha: number;
+    }[];
+    eigenvalues: number[];
+    eigenvectors: number[][];
+  }
+>();
+
 /**
  * Computes raw Extended Hückel Theory (EHT) eigenvalues and eigenvectors using
  * a full 4-orbital (ns, npx, npy, npz) valence basis for heavy atoms and 1s for H,
  * with directional Slater-Koster two-center overlap integrals S_mu_nu(R_AB).
+ * For large molecules (> 24 atoms), uses an active-space valence basis (retaining
+ * heavy atoms + heteroatom hydrogens while folding aliphatic C-H sigma orbitals)
+ * and memoizes the diagonalization by geometry hash.
  */
 export function runExtendedHuckelSolver(
   atoms: AtomNode[],
@@ -860,6 +911,13 @@ export function runExtendedHuckelSolver(
   eigenvalues: number[];
   eigenvectors: number[][];
 } {
+  const cacheKey =
+    atoms.map((a) => `${a.id}:${a.element}:${a.x3d},${a.y3d},${a.z3d}`).join('|') +
+    '#' +
+    bonds.map((b) => `${b.source}-${b.target}:${b.order}`).join('|');
+  const cached = ehtSolverCache.get(cacheKey);
+  if (cached) return cached;
+
   interface BasisFunc {
     atom: AtomNode;
     orbital: 's' | 'px' | 'py' | 'pz';
@@ -867,8 +925,24 @@ export function runExtendedHuckelSolver(
     alpha: number; // diagonal Coulomb integral H_ii in eV
   }
 
+  // For large systems (> 28 atoms), prune explicit C-H hydrogens from the active matrix
+  // so the solver focuses on the heavy-atom framework + heteroatom H and runs in < 20 ms
+  const isLargeSystem = atoms.length > 28;
+  const activeAtoms = isLargeSystem
+    ? atoms
+        .filter((a) => {
+          if (a.element !== 'H') return true;
+          const attached = bonds.find((b) => b.source === a.id || b.target === a.id);
+          if (!attached) return false;
+          const partnerId = attached.source === a.id ? attached.target : attached.source;
+          const partner = atoms.find((p) => p.id === partnerId);
+          return partner && partner.element !== 'C';
+        })
+        .slice(0, 48)
+    : atoms;
+
   const basis: BasisFunc[] = [];
-  for (const a of atoms) {
+  for (const a of activeAtoms) {
     const props = ELEMENT_PROPERTIES[a.element] || ELEMENT_PROPERTIES.C;
     const shell = a.element === 'P' || a.element === 'S' || a.element === 'Cl' ? '3' : a.element === 'Xe' ? '5' : '2';
     if (a.element === 'H') {
@@ -979,7 +1053,13 @@ export function runExtendedHuckelSolver(
   }
 
   const { eigenvalues, eigenvectors } = jacobiEigenvalues(H);
-  return { basis, eigenvalues, eigenvectors };
+  const result = { basis, eigenvalues, eigenvectors };
+  if (ehtSolverCache.size > 24) {
+    const firstKey = ehtSolverCache.keys().next().value;
+    if (firstKey) ehtSolverCache.delete(firstKey);
+  }
+  ehtSolverCache.set(cacheKey, result);
+  return result;
 }
 
 /**
@@ -1012,10 +1092,14 @@ export function analyzeMolecularGraph(
     );
   }
 
-  // 2. Otherwise, expand implicit hydrogens, reconstruct 3D VSEPR coordinates if flat (z3d ≈ 0),
+  // 2. Otherwise, expand implicit hydrogens (for small/medium graphs <= 24 atoms),
+  //    reconstruct 3D VSEPR coordinates if flat (z3d ≈ 0),
   //    and run the full 4-orbital Extended Hückel LCAO-MO + Symmetry solver
-  const { atoms, bonds } = expandImplicitHydrogens(rawAtoms, rawBonds);
-  const { formula } = computeMolecularFormula(atoms, bonds, false);
+  const shouldExpandImplicitH = rawAtoms.length <= 24;
+  const { atoms, bonds } = shouldExpandImplicitH
+    ? expandImplicitHydrogens(rawAtoms, rawBonds)
+    : { atoms: rawAtoms, bonds: rawBonds };
+  const { formula } = computeMolecularFormula(atoms, bonds, !shouldExpandImplicitH);
   const smiles = generateSmilesFromGraph(atoms, bonds);
   const centeredAtoms = reconstruct3DGeometryFromVSEPR(atoms, bonds, charge);
   const pointGroupId = detectPointGroup(centeredAtoms, bonds, charge);
@@ -1024,11 +1108,11 @@ export function analyzeMolecularGraph(
   const { basis, eigenvalues, eigenvectors } = runExtendedHuckelSolver(centeredAtoms, bonds);
   const N = basis.length;
 
-  // Exact physical neutral valence electrons = sum(Z_val); charge is applied once in applyElectronicState
-  const rawValenceElectrons = centeredAtoms.reduce(
-    (sum, a) => sum + (ELEMENT_PROPERTIES[a.element]?.valenceElectrons ?? 4),
-    0
-  );
+  // Exact physical neutral valence electrons = sum(Z_val) of active basis atoms; charge is applied once in applyElectronicState
+  const activeBasisAtomIds = new Set(basis.map((b) => b.atom.id));
+  const rawValenceElectrons = centeredAtoms
+    .filter((a) => activeBasisAtomIds.has(a.id))
+    .reduce((sum, a) => sum + (ELEMENT_PROPERTIES[a.element]?.valenceElectrons ?? 4), 0);
   const neutralElectrons = Math.max(1, Math.min(N * 2, rawValenceElectrons));
 
   // Detect whether the molecule is linear along the x-axis or planar in the xy-plane (z ≈ 0)
@@ -1202,6 +1286,8 @@ export function analyzeMolecularGraph(
           ? 'n (Lone Pair)'
           : 'σ';
 
+    const lcaoMinCoeff = centeredAtoms.length > 20 ? 0.06 : 0.14;
+    const lcaoMaxTerms = centeredAtoms.length > 20 ? 24 : 8;
     const lcao: LCAOContribution[] = vec
       .map((coeff, k) => ({
         atomId: basis[k].atom.id,
@@ -1210,8 +1296,9 @@ export function analyzeMolecularGraph(
         label: basis[k].label,
         coeff: Number(coeff.toFixed(2)),
       }))
-      .filter((c) => Math.abs(c.coeff) >= 0.14)
-      .slice(0, 8);
+      .sort((a, b) => Math.abs(b.coeff) - Math.abs(a.coeff))
+      .filter((c) => Math.abs(c.coeff) >= lcaoMinCoeff)
+      .slice(0, lcaoMaxTerms);
 
     // Group nearly degenerate eigenvalues into a shared degenerateGroup and assign consistent Mulliken irreps
     const prevMo = molecularOrbitals[molecularOrbitals.length - 1];

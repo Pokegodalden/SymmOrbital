@@ -39,6 +39,47 @@ export const Latex: React.FC<LatexProps> = ({
   );
 };
 
+const GREEK_LATEX_MAP: Record<string, string> = {
+  β: '\\beta',
+  '\\beta': '\\beta',
+  α: '\\alpha',
+  '\\alpha': '\\alpha',
+  γ: '\\gamma',
+  '\\gamma': '\\gamma',
+  π: '\\pi',
+  '\\pi': '\\pi',
+  σ: '\\sigma',
+  '\\sigma': '\\sigma',
+  δ: '\\delta',
+  '\\delta': '\\delta',
+  Δ: '\\Delta',
+  '\\Delta': '\\Delta',
+};
+
+/**
+ * Renders chemical names, category labels, and prose strings while converting
+ * embedded Greek symbols (e.g. β in "β-Carotene", α/β/γ in "α,β,γ-Triphosphate", π in "π-Systems")
+ * into crisp KaTeX math glyphs so they never fail to render in UI fonts.
+ */
+export const ChemText: React.FC<{ text: string; className?: string }> = ({
+  text,
+  className = '',
+}) => {
+  if (!text) return null;
+  const parts = text.split(/(\\(?:beta|alpha|gamma|pi|sigma|delta|Delta)|[βαγπσδΔ])/g);
+  return (
+    <span className={className}>
+      {parts.map((part, idx) => {
+        const latexCmd = GREEK_LATEX_MAP[part];
+        if (latexCmd) {
+          return <Latex key={idx} math={latexCmd} />;
+        }
+        return <React.Fragment key={idx}>{part}</React.Fragment>;
+      })}
+    </span>
+  );
+};
+
 /**
  * Renders a molecular orbital or fragment label inside an SVG <text> element
  * with true mathematical subscript/superscript <tspan> shifts so SVG diagrams

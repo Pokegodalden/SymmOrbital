@@ -13,7 +13,7 @@ import {
   moLabelToLatex,
   schoenfliesToLatex,
 } from '../chemistry/latexUtils';
-import { Latex } from './Latex';
+import { ChemText, Latex } from './Latex';
 import { CheckCircle2, ExternalLink, FlaskConical, Scale } from 'lucide-react';
 
 interface DatabaseVerificationPanelProps {
@@ -131,7 +131,7 @@ export const DatabaseVerificationPanel: React.FC<DatabaseVerificationPanelProps>
                 <div>
                   <div className="flex items-center gap-2 text-xs">
                     <span className="font-semibold text-slate-900">
-                      Active Compound: {activeBench.name} (
+                      Active Compound: <ChemText text={activeBench.name} /> (
                       <Latex math={formulaToLatex(activeBench.formula)} />)
                     </span>
                     <span className="text-slate-300" aria-hidden="true">·</span>
@@ -247,7 +247,9 @@ export const DatabaseVerificationPanel: React.FC<DatabaseVerificationPanelProps>
                               {diff.toFixed(2)} eV
                             </span>
                           </td>
-                          <td className="py-2 px-3 text-slate-600">{band.character}</td>
+                          <td className="py-2 px-3 text-slate-600">
+                            <ChemText text={band.character} />
+                          </td>
                         </tr>
                       );
                     })}
@@ -311,7 +313,7 @@ export const DatabaseVerificationPanel: React.FC<DatabaseVerificationPanelProps>
                     </span>
                   </div>
                   <p className="text-slate-700 mt-1 leading-relaxed">
-                    {activeBench.critiqueNote}
+                    <ChemText text={activeBench.critiqueNote} />
                   </p>
                 </div>
               </div>
@@ -323,7 +325,7 @@ export const DatabaseVerificationPanel: React.FC<DatabaseVerificationPanelProps>
                 <div>
                   <span className="font-semibold text-slate-900 block">
                     Live Extended Hückel LCAO-MO &amp; 3D Symmetry Evaluation:{' '}
-                    {molecule.name} (<Latex math={formulaToLatex(molecule.formula)} />)
+                    <ChemText text={molecule.name} /> (<Latex math={formulaToLatex(molecule.formula)} />)
                   </span>
                   <span className="text-slate-600 mt-0.5 block">
                     Detected Point Group:{' '}
@@ -426,7 +428,9 @@ export const DatabaseVerificationPanel: React.FC<DatabaseVerificationPanelProps>
                     }`}
                   >
                     <td className="py-2 px-2.5 border-r border-slate-200 whitespace-nowrap">
-                      <span className="font-semibold text-slate-900">{row.name}</span>{' '}
+                      <span className="font-semibold text-slate-900">
+                        <ChemText text={row.name} />
+                      </span>{' '}
                       <span className="text-slate-500">
                         (<Latex math={formulaToLatex(row.formula)} />)
                       </span>

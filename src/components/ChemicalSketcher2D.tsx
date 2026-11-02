@@ -71,19 +71,45 @@ export const ChemicalSketcher2D: React.FC<ChemicalSketcher2DProps> = ({
   const [hoveredBondId, setHoveredBondId] = useState<string | null>(null);
   const [canvasFocused, setCanvasFocused] = useState<boolean>(false);
   const [smilesInput, setSmilesInput] = useState<string>('');
+  const [zoomFactor, setZoomFactor] = useState<number>(1.0);
   const [history, setHistory] = useState<GraphSnapshot[]>([]);
   const [redoStack, setRedoStack] = useState<GraphSnapshot[]>([]);
   const svgRef = useRef<SVGSVGElement | null>(null);
 
-  // Coordinate conversion between SVG pixels (460 x 340) and chemical Angstrom space (-3.5..3.5)
+  // Reset manual zoom multiplier when switching to a molecule with a different atom count
+  useEffect(() => {
+    setZoomFactor(1.0);
+  }, [atoms.length]);
+
+  // Dynamic coordinate conversion between SVG pixels (460 x 340) and chemical Angstrom space
+  // Auto-scales to fit large polyenes (e.g. β-Carotene ~29 Å) and biomolecules (e.g. ATP ~19 Å)
   const SVG_WIDTH = 460;
   const SVG_HEIGHT = 340;
-  const SCALE = 58; // pixels per Angstrom
+  const BASE_SCALE = 58; // default pixels per Angstrom for small molecules
 
-  const toScreenX = (x2d: number) => SVG_WIDTH / 2 + x2d * SCALE;
-  const toScreenY = (y2d: number) => SVG_HEIGHT / 2 + y2d * SCALE;
-  const toChemX = (px: number) => Number(((px - SVG_WIDTH / 2) / SCALE).toFixed(2));
-  const toChemY = (py: number) => Number(((py - SVG_HEIGHT / 2) / SCALE).toFixed(2));
+  const minX2d = atoms.length > 0 ? Math.min(...atoms.map((a) => a.x2d)) : -2;
+  const maxX2d = atoms.length > 0 ? Math.max(...atoms.map((a) => a.x2d)) : 2;
+  const minY2d = atoms.length > 0 ? Math.min(...atoms.map((a) => a.y2d)) : -1.5;
+  const maxY2d = atoms.length > 0 ? Math.max(...atoms.map((a) => a.y2d)) : 1.5;
+  const spanX = Math.max(4.5, maxX2d - minX2d + 2.2);
+  const spanY = Math.max(3.5, maxY2d - minY2d + 2.0);
+  const centerX2d = atoms.length > 0 ? (minX2d + maxX2d) / 2 : 0;
+  const centerY2d = atoms.length > 0 ? (minY2d + maxY2d) / 2 : 0;
+
+  const autoFitScale = Math.min(
+    BASE_SCALE,
+    (SVG_WIDTH - 56) / spanX,
+    (SVG_HEIGHT - 56) / spanY
+  );
+  const SCALE = Math.max(10, Math.min(95, autoFitScale * zoomFactor));
+  const isCompactMacroView = atoms.length > 18 || SCALE < 32;
+
+  const toScreenX = (x2d: number) => SVG_WIDTH / 2 + (x2d - centerX2d) * SCALE;
+  const toScreenY = (y2d: number) => SVG_HEIGHT / 2 + (y2d - centerY2d) * SCALE;
+  const toChemX = (px: number) =>
+    Number((centerX2d + (px - SVG_WIDTH / 2) / SCALE).toFixed(2));
+  const toChemY = (py: number) =>
+    Number((centerY2d + (py - SVG_HEIGHT / 2) / SCALE).toFixed(2));
 
   const commitGraphChange = (
     nextAtoms: AtomNode[],
@@ -991,13 +1017,23 @@ export const ChemicalSketcher2D: React.FC<ChemicalSketcher2DProps> = ({
                     ? '#059669'
                     : atom.element === 'S'
                       ? '#CA8A04'
-                      : atom.element === 'B'
-                        ? '#DB2777'
-                        : atom.element === 'Xe'
-                          ? '#0891B2'
-                          : atom.element === 'H'
-                            ? '#475569'
-                            : '#0F172A';
+                      : atom.element === 'P'
+                        ? '#D97706'
+                        : atom.element === 'B'
+                          ? '#DB2777'
+                          : atom.element === 'Xe'
+                            ? '#0891B2'
+                            : atom.element === 'H'
+                              ? '#475569'
+                              : '#0F172A';
+
+            const atomRadius = isCompactMacroView
+              ? atom.element === 'H'
+                ? 6.5
+                : 8.5
+              : atom.element === 'H'
+                ? 12
+                : 15;
 
             return (
               <g
@@ -1015,7 +1051,7 @@ export const ChemicalSketcher2D: React.FC<ChemicalSketcher2DProps> = ({
                 onClick={(e) => handleAtomClick(e, atom)}
               >
                 <circle
-                  r={atom.element === 'H' ? 12 : 15}
+                  r={atomRadius}
                   fill="#FFFFFF"
                   stroke={
                     isHovered
@@ -1024,28 +1060,63 @@ export const ChemicalSketcher2D: React.FC<ChemicalSketcher2DProps> = ({
                         : '#2563EB'
                       : '#CBD5E1'
                   }
-                  strokeWidth={isHovered ? 2.2 : 1.4}
+                  strokeWidth={isHovered ? 2.0 : isCompactMacroView ? 1.0 : 1.4}
                 />
                 <text
                   textAnchor="middle"
                   dominantBaseline="central"
                   fill={elemColor}
-                  className="font-mono text-xs font-bold select-none"
+                  className={`font-mono font-bold select-none ${
+                    isCompactMacroView ? 'text-[8px]' : 'text-xs'
+                  }`}
                 >
                   {atom.element}
                 </text>
-                <text
-                  y={atom.element === 'H' ? 19 : 23}
-                  textAnchor="middle"
-                  fill="#94A3B8"
-                  className="font-mono text-[9px] select-none"
-                >
-                  {atom.id}
-                </text>
+                {(!isCompactMacroView || isHovered) && (
+                  <text
+                    y={atomRadius + 8}
+                    textAnchor="middle"
+                    fill="#94A3B8"
+                    className="font-mono text-[9px] select-none"
+                  >
+                    {atom.id}
+                  </text>
+                )}
               </g>
             );
           })}
         </svg>
+
+        {/* Floating 2D Zoom & Auto-Fit Controls for Large Molecules */}
+        <div className="absolute top-2.5 right-2.5 flex items-center gap-1 bg-white/90 border border-slate-200 rounded px-1.5 py-0.5 text-[10px] font-mono text-slate-600 shadow-2xs">
+          <span>{Math.round((SCALE / BASE_SCALE) * 100)}%</span>
+          <button
+            type="button"
+            onClick={() => setZoomFactor((z) => Math.min(2.5, Number((z * 1.2).toFixed(2))))}
+            title="Zoom In 2D Canvas"
+            className="px-1.5 py-0.5 hover:bg-slate-100 rounded font-bold text-slate-700"
+          >
+            +
+          </button>
+          <button
+            type="button"
+            onClick={() => setZoomFactor((z) => Math.max(0.5, Number((z / 1.2).toFixed(2))))}
+            title="Zoom Out 2D Canvas"
+            className="px-1.5 py-0.5 hover:bg-slate-100 rounded font-bold text-slate-700"
+          >
+            −
+          </button>
+          {zoomFactor !== 1.0 && (
+            <button
+              type="button"
+              onClick={() => setZoomFactor(1.0)}
+              title="Reset Auto-Fit Scale"
+              className="px-1 py-0.5 text-blue-600 hover:underline"
+            >
+              Fit
+            </button>
+          )}
+        </div>
 
         {atoms.length === 0 && (
           <div className="absolute inset-0 pointer-events-none flex flex-col items-center justify-center text-center p-4">

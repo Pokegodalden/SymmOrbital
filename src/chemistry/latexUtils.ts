@@ -176,17 +176,20 @@ export function moLabelToLatex(label: string): string {
   const parenRaw = m[2]
     .replace(/HOMO/g, '\\mathrm{HOMO}')
     .replace(/LUMO/g, '\\mathrm{LUMO}')
-    .replace(/σ\*_([A-Za-z0-9]+)/g, '\\sigma^*_{\\mathrm{$1}}')
-    .replace(/σ_([A-Za-z0-9]+)/g, '\\sigma_{\\mathrm{$1}}')
-    .replace(/π\*_([A-Za-z0-9]+)/g, '\\pi^*_{\\mathrm{$1}}')
-    .replace(/π_([A-Za-z0-9]+)/g, '\\pi_{\\mathrm{$1}}')
-    .replace(/n_([A-Za-z0-9]+)/g, 'n_{\\mathrm{$1}}')
+    .replace(/σ\*_([A-Za-z0-9αβγ]+)/g, '\\sigma^*_{\\mathrm{$1}}')
+    .replace(/σ_([A-Za-z0-9αβγ]+)/g, '\\sigma_{\\mathrm{$1}}')
+    .replace(/π\*_([A-Za-z0-9αβγ]+)/g, '\\pi^*_{\\mathrm{$1}}')
+    .replace(/π_([A-Za-z0-9αβγ]+)/g, '\\pi_{\\mathrm{$1}}')
+    .replace(/n_([A-Za-z0-9αβγ]+)/g, 'n_{\\mathrm{$1}}')
     .replace(/π(\d+)\*/g, '\\pi_{$1}^*')
     .replace(/π(\d+)/g, '\\pi_{$1}')
     .replace(/π\*/g, '\\pi^*')
     .replace(/σ\*/g, '\\sigma^*')
     .replace(/π/g, '\\pi')
-    .replace(/σ/g, '\\sigma');
+    .replace(/σ/g, '\\sigma')
+    .replace(/α/g, '\\alpha ')
+    .replace(/β/g, '\\beta ')
+    .replace(/γ/g, '\\gamma ');
 
   return `${mainPart}\\;(${parenRaw})`;
 }
@@ -270,7 +273,10 @@ export function aoLabelToLatex(aoLabel: string): string {
     .replace(/(\d)dx²-y²|(\d)dx2y2/g, '$1$2d_{x^2-y^2}')
     .replace(/\(in-plane\)/g, '\\;(\\text{in-plane})')
     .replace(/\(out-of-plane\)/g, '\\;(\\text{out-of-plane})')
-    .replace(/\(π\)/g, '(\\pi)');
+    .replace(/\(π\)/g, '(\\pi)')
+    .replace(/α/g, '\\alpha ')
+    .replace(/β/g, '\\beta ')
+    .replace(/γ/g, '\\gamma ');
 }
 
 /**
