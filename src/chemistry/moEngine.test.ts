@@ -115,6 +115,23 @@ test('NIST Chemistry WebBook PES & NIST CCCBDB benchmark audit achieves 100% poi
   const atpRow = audit.rows.find((r) => r.formula === 'C10H16N5O13P3')!;
   assert.equal(atpRow.detectedPointGroup, 'Cs');
   assert.equal(-atpRow.calibratedHomoEnergyEv, 8.40);
+
+  // Verify Ethylene (C2H4, D2h) has its complete 12-MO valence manifold (6 occupied = 12e-, 6 virtual)
+  // matching Γ_val = 3Ag + B2g + 2B3g + 3B1u + 2B2u + B3u and all 6 experimental NIST PES bands
+  const c2h4Mol = CANONICAL_MOLECULES.find((m) => m.formula === 'C2H4')!;
+  assert.equal(c2h4Mol.molecularOrbitals.length, 12);
+  const c2h4Occupied = c2h4Mol.molecularOrbitals.filter((m) => m.occupancy === 2);
+  const c2h4Virtual = c2h4Mol.molecularOrbitals.filter((m) => m.occupancy === 0);
+  assert.equal(c2h4Occupied.length, 6);
+  assert.equal(c2h4Virtual.length, 6);
+  const c2h4TotalElec = c2h4Mol.molecularOrbitals.reduce((s, m) => s + m.occupancy, 0);
+  assert.equal(c2h4TotalElec, 12);
+  const d2hDecomp = decomposeReducibleRepresentation(
+    POINT_GROUPS.D2h,
+    [12, 0, 0, 0, 0, 0, 4, 8]
+  );
+  assert.equal(d2hDecomp.formula, '3Ag + B2g + 2B3g + 3B1u + 2B2u + B3u');
+  assert.equal(NIST_CCCBDB_BENCHMARKS.C2H4.pesBands.length, 6);
 });
 
 test('Point group detection, VSEPR 3D reconstruction, and edge-case implicit-H rules preserve all 22 canonical molecules including C40H56 and C10H16N5O13P3', () => {

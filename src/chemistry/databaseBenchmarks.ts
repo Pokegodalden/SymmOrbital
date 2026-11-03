@@ -171,14 +171,16 @@ export const NIST_CCCBDB_BENCHMARKS: Record<string, DatabaseBenchmarkEntry> = {
     homoIrrep: 'B3u',
     homoMoLabel: '1b3u (π HOMO)',
     pesBands: [
-      { moLabel: '1b3u (π)', irrep: 'B3u', experimentalIpEv: 10.51, character: 'Out-of-plane C=C π bonding HOMO' },
-      { moLabel: '1b2g', irrep: 'B2g', experimentalIpEv: 12.85, character: 'In-plane C–H σ_CH2 combination' },
-      { moLabel: '3ag', irrep: 'Ag', experimentalIpEv: 14.66, character: 'Central C–C σ bonding' },
-      { moLabel: '1b3u', irrep: 'B3u', experimentalIpEv: 15.87, character: 'C–H σ_CH2 antisymmetric combination' },
+      { moLabel: '1b3u (π HOMO)', irrep: 'B3u', experimentalIpEv: 10.51, character: 'Out-of-plane C=C π bonding HOMO' },
+      { moLabel: '1b3g (σ_CH2)', irrep: 'B3g', experimentalIpEv: 12.85, character: 'Out-of-phase in-plane C–H σ_CH2 combination (HOMO−1)' },
+      { moLabel: '3ag (σ_CC)', irrep: 'Ag', experimentalIpEv: 14.66, character: 'Central C–C sp² head-on σ bonding' },
+      { moLabel: '1b2u (σ_CH2)', irrep: 'B2u', experimentalIpEv: 15.87, character: 'In-plane π_CH2-type C–H σ bonding combination' },
+      { moLabel: '2b1u (σ_CH2)', irrep: 'B1u', experimentalIpEv: 19.10, character: 'Inner-valence out-of-phase C 2s – H 1s σ_CH2 bonding' },
+      { moLabel: '2ag (σ_CC+CH)', irrep: 'Ag', experimentalIpEv: 23.60, character: 'Totally symmetric inner-valence C 2s + H 1s σ bonding' },
     ],
-    literatureSource: 'NIST WebBook / Baker et al., J. Chem. Soc. B, 22 (1968)',
+    literatureSource: 'NIST WebBook / Baker et al., J. Chem. Soc. B, 22 (1968); Brundle et al., J. Chem. Phys. 56, 306 (1972)',
     critiqueNote:
-      'HOMO (1b1u, -10.51 eV) and LUMO (1b2g*, -2.85 eV) yield ΔE(π→π*) = 7.66 eV (162 nm), matching the experimental VUV N→V transition of ethylene (7.65 eV).',
+      'Complete 12-MO valence manifold (3Ag + B2g + 2B3g + 3B1u + 2B2u + B3u) reproduces all 6 experimental PES bands from 10.51 to 23.60 eV, while HOMO (1b3u, -10.51 eV) and LUMO (1b2g*, -2.85 eV) yield ΔE(π→π*) = 7.66 eV (162 nm), matching the VUV N→V transition (7.65 eV).',
   },
   CH2O: {
     moleculeId: 'CH2O',

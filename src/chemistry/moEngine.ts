@@ -1188,10 +1188,10 @@ export function analyzeMolecularGraph(
     },
   ];
 
-  // Select chemically informative frontier & valence MOs around HOMO/LUMO without slicing degenerate pairs
+  // Select all valence MOs when N <= 14 (e.g. C2H4 with 12 AOs), or a 12-orbital frontier window for larger systems without slicing degenerate pairs
   const homoIdx = Math.max(0, Math.min(N - 1, Math.floor((neutralElectrons - 1) / 2)));
-  let startIdx = Math.max(0, Math.min(homoIdx - 4, N - 8));
-  let endIdx = Math.min(N - 1, Math.max(homoIdx + 3, startIdx + 7));
+  let startIdx = N <= 14 ? 0 : Math.max(0, Math.min(homoIdx - 5, N - 12));
+  let endIdx = N <= 14 ? N - 1 : Math.min(N - 1, Math.max(homoIdx + 5, startIdx + 11));
   if (startIdx > 0 && Math.abs(eigenvalues[startIdx] - eigenvalues[startIdx - 1]) < 0.08) {
     startIdx -= 1;
   }

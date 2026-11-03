@@ -257,7 +257,18 @@ export const SymmetryGroupPanel: React.FC<SymmetryGroupPanelProps> = ({
                   onMouseLeave={() => onHoverIrrep?.(null)}
                   onClick={() => {
                     if (matchingMos.length > 0 && onSelectMo) {
-                      onSelectMo(matchingMos[matchingMos.length - 1]);
+                      const currentIdx = matchingMos.findIndex((m) => m.id === selectedMo?.id);
+                      if (currentIdx >= 0) {
+                        const nextIdx = (currentIdx + 1) % matchingMos.length;
+                        onSelectMo(matchingMos[nextIdx]);
+                      } else {
+                        const occupiedMatches = matchingMos.filter((m) => m.occupancy > 0);
+                        onSelectMo(
+                          occupiedMatches.length > 0
+                            ? occupiedMatches[occupiedMatches.length - 1]
+                            : matchingMos[0]
+                        );
+                      }
                     }
                   }}
                   title={

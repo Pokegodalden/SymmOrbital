@@ -271,6 +271,7 @@ export const POINT_GROUPS: Record<string, PointGroupData> = {
       { id: 'sigma_xy', type: 'plane', label: 'σ(xy)', schoenflies: 'σ(xy)', axis: [1, 0, 0], color: '#D97706', description: 'Mirror plane bisecting the C=C bond' },
     ],
     defaultReduciblePresets: [
+      { id: 'valence_12', label: 'Γ_val (12 Ethylene Valence AOs)', characters: [12, 0, 0, 0, 0, 0, 4, 8], description: 'All 12 valence AOs of C2H4 (2×C 2s,2px,2py,2pz + 4×H 1s) decompose into 3Ag + B2g + 2B3g + 3B1u + 2B2u + B3u' },
       { id: 'pi_system', label: 'Γ_π (2 Carbon 2px π Orbitals)', characters: [2, -2, 0, 0, 0, 2, 0, -2], description: 'Two out-of-plane 2px orbitals form bonding b3u (π) and antibonding b2g (π*)' },
       { id: 'ch_bonds', label: 'Γ_CH (4 C–H σ Bonds)', characters: [4, 0, 0, 0, 0, 0, 0, 4], description: 'Four C–H sigma bonds decompose into Ag + B3g + B1u + B2u' },
     ],

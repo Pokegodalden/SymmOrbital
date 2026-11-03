@@ -602,7 +602,10 @@ export const OrbitalVisualizer3D: React.FC<OrbitalVisualizer3DProps> = ({
               addNodePlane([1, 0, 0]);
             }
           } else {
-            addNodePlane([1, 0, 0]);
+            const psiAlongX = Math.abs(evaluateOrbitalWavefunction(mo, mol.atoms, 0.75, 0, 0));
+            const psiAlongY = Math.abs(evaluateOrbitalWavefunction(mo, mol.atoms, 0, 0.75, 0));
+            const isYZeroNode = mo.nodalPlanes === 1 && psiAlongX > 0.02 && psiAlongY < 1e-4;
+            addNodePlane(isYZeroNode ? [0, 1, 0] : [1, 0, 0]);
             if (mo.nodalPlanes >= 2) {
               addNodePlane([0, 1, 0]);
             }

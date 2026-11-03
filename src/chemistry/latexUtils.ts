@@ -66,7 +66,7 @@ export function irrepToLatex(irrep: string): string {
 }
 
 function singleIrrepTermToLatex(term: string): string {
-  const m = term.trim().match(/^(\d*)([A-Za-zΣΠΔ]+)([0-9gu'+\-*]*)$/);
+  const m = term.trim().match(/^(\d*)([A-Za-zΣΠΔ])([0-9gu'+\-*]*)$/);
   if (!m) return term;
   const [, coeff, base, suffix] = m;
 
@@ -176,11 +176,11 @@ export function moLabelToLatex(label: string): string {
   const parenRaw = m[2]
     .replace(/HOMO/g, '\\mathrm{HOMO}')
     .replace(/LUMO/g, '\\mathrm{LUMO}')
-    .replace(/σ\*_([A-Za-z0-9αβγ]+)/g, '\\sigma^*_{\\mathrm{$1}}')
-    .replace(/σ_([A-Za-z0-9αβγ]+)/g, '\\sigma_{\\mathrm{$1}}')
-    .replace(/π\*_([A-Za-z0-9αβγ]+)/g, '\\pi^*_{\\mathrm{$1}}')
-    .replace(/π_([A-Za-z0-9αβγ]+)/g, '\\pi_{\\mathrm{$1}}')
-    .replace(/n_([A-Za-z0-9αβγ]+)/g, 'n_{\\mathrm{$1}}')
+    .replace(/σ\*_([A-Za-z0-9αβγ+]+)/g, '\\sigma^*_{\\mathrm{$1}}')
+    .replace(/σ_([A-Za-z0-9αβγ+]+)/g, '\\sigma_{\\mathrm{$1}}')
+    .replace(/π\*_([A-Za-z0-9αβγ+]+)/g, '\\pi^*_{\\mathrm{$1}}')
+    .replace(/π_([A-Za-z0-9αβγ+]+)/g, '\\pi_{\\mathrm{$1}}')
+    .replace(/n_([A-Za-z0-9αβγ+]+)/g, 'n_{\\mathrm{$1}}')
     .replace(/π(\d+)\*/g, '\\pi_{$1}^*')
     .replace(/π(\d+)/g, '\\pi_{$1}')
     .replace(/π\*/g, '\\pi^*')
@@ -201,7 +201,7 @@ function formatSingleMoTokenLatex(token: string): string {
     return `${formatSingleMoTokenLatex(subParen[1])}({${subParen[2]}})`;
   }
 
-  const m = token.match(/^(\d+)(σ|π|δ|[a-zA-Z]+)([0-9gu'+\-*]*)$/);
+  const m = token.match(/^(\d+)(σ|π|δ|[a-zA-Z])([0-9gu'+\-*]*)$/);
   if (!m) return token;
   const [, num, sym, rest] = m;
 

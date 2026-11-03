@@ -96,10 +96,11 @@ export const MODiagramPanel: React.FC<MODiagramPanelProps> = ({
   };
 
   // SVG Correlation Diagram Geometry
+  const isDenseManifold = rows.length >= 9;
   const SVG_W = 580;
   const SVG_H = 360;
-  const PAD_TOP = 32;
-  const PAD_BOT = 28;
+  const PAD_TOP = isDenseManifold ? 22 : 32;
+  const PAD_BOT = isDenseManifold ? 18 : 28;
 
   const allEnergies = [
     ...mos.map((m) => m.energy),
@@ -119,7 +120,8 @@ export const MODiagramPanel: React.FC<MODiagramPanelProps> = ({
       PAD_TOP +
       ((maxE - mo.energy) / Math.max(1, maxE - minE)) *
         (SVG_H - PAD_TOP - PAD_BOT);
-    return Number((0.72 * rankY + 0.28 * linearY).toFixed(1));
+    const rankWeight = isDenseManifold ? 0.9 : 0.72;
+    return Number((rankWeight * rankY + (1 - rankWeight) * linearY).toFixed(1));
   };
 
   const getFragY = (energy: number): number => {
@@ -398,13 +400,19 @@ export const MODiagramPanel: React.FC<MODiagramPanelProps> = ({
                     rx={4}
                   />
                   <text
-                    x={SVG_W / 2}
-                    y={(getMoY(homoMo.id) + getMoY(lumoMo.id)) / 2 + 3}
-                    textAnchor="middle"
+                    x={isDenseManifold ? 190 : SVG_W / 2}
+                    y={
+                      isDenseManifold
+                        ? (getMoY(homoMo.id) + getMoY(lumoMo.id)) / 2 + 2
+                        : (getMoY(homoMo.id) + getMoY(lumoMo.id)) / 2 + 3
+                    }
+                    textAnchor={isDenseManifold ? 'start' : 'middle'}
                     fill="#1D4ED8"
-                    className="font-mono text-[10px] font-semibold"
+                    className="font-mono text-[9.5px] font-semibold"
                   >
-                    ΔE = {homoLumoGapEv.toFixed(2)} eV
+                    {isDenseManifold
+                      ? `ΔE ${homoLumoGapEv.toFixed(2)}eV`
+                      : `ΔE = ${homoLumoGapEv.toFixed(2)} eV`}
                   </text>
                 </g>
               )}
@@ -494,10 +502,20 @@ export const MODiagramPanel: React.FC<MODiagramPanelProps> = ({
               {rows.map((row) => {
                 const y = getMoY(row.orbitals[0].id);
                 const count = row.orbitals.length;
-                const rungWidth = count === 1 ? 84 : count === 2 ? 62 : 44;
+                const rungWidth =
+                  count === 1
+                    ? isDenseManifold
+                      ? 58
+                      : 84
+                    : count === 2
+                      ? 62
+                      : 44;
                 const gap = count === 1 ? 0 : count === 2 ? 28 : 18;
                 const totalW = count * rungWidth + (count - 1) * gap;
-                const startX = (SVG_W - totalW) / 2;
+                const startX =
+                  count === 1 && isDenseManifold
+                    ? (SVG_W - totalW) / 2 - 18
+                    : (SVG_W - totalW) / 2;
 
                 return (
                   <g key={`row_${row.orbitals[0].id}`}>
@@ -530,9 +548,13 @@ export const MODiagramPanel: React.FC<MODiagramPanelProps> = ({
                           {/* Click hit box */}
                           <rect
                             x={-6}
-                            y={-14}
-                            width={rungWidth + 12}
-                            height={28}
+                            y={isDenseManifold ? -12 : -14}
+                            width={
+                              count === 1 && isDenseManifold
+                                ? rungWidth + 56
+                                : rungWidth + 12
+                            }
+                            height={isDenseManifold ? 20 : 28}
                             rx={4}
                             fill={
                               isSelected
@@ -565,7 +587,7 @@ export const MODiagramPanel: React.FC<MODiagramPanelProps> = ({
                           {/* Spin Electrons (Up / Down Arrows) */}
                           {mo.occupancy >= 1 && (
                             <path
-                              d={`M ${rungWidth / 2 - 5} 6 L ${rungWidth / 2 - 5} -8 L ${rungWidth / 2 - 8} -4`}
+                              d={`M ${rungWidth / 2 - 5} 5 L ${rungWidth / 2 - 5} -7 L ${rungWidth / 2 - 8} -3`}
                               fill="none"
                               stroke={isSelected ? '#1D4ED8' : '#0F172A'}
                               strokeWidth={1.8}
@@ -575,7 +597,7 @@ export const MODiagramPanel: React.FC<MODiagramPanelProps> = ({
                           )}
                           {mo.occupancy === 2 && (
                             <path
-                              d={`M ${rungWidth / 2 + 5} -8 L ${rungWidth / 2 + 5} 6 L ${rungWidth / 2 + 8} 2`}
+                              d={`M ${rungWidth / 2 + 5} -7 L ${rungWidth / 2 + 5} 5 L ${rungWidth / 2 + 8} 1`}
                               fill="none"
                               stroke={isSelected ? '#1D4ED8' : '#0F172A'}
                               strokeWidth={1.8}
@@ -588,15 +610,15 @@ export const MODiagramPanel: React.FC<MODiagramPanelProps> = ({
                           <SvgMathLabel
                             text={mo.label}
                             x={rungWidth / 2}
-                            y={-10}
+                            y={isDenseManifold ? -8 : -10}
                             textAnchor="middle"
                             fill={isSelected ? '#1D4ED8' : '#0F172A'}
                             className="font-mono text-[10px] font-bold"
                           />
                           <text
-                            x={rungWidth / 2}
-                            y={13}
-                            textAnchor="middle"
+                            x={count === 1 && isDenseManifold ? rungWidth + 6 : rungWidth / 2}
+                            y={count === 1 && isDenseManifold ? 3 : 13}
+                            textAnchor={count === 1 && isDenseManifold ? 'start' : 'middle'}
                             fill="#64748B"
                             className="font-mono text-[9px]"
                           >
