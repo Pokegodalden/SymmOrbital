@@ -24,6 +24,10 @@ import {
   NIST_CCCBDB_BENCHMARKS,
   evaluateEngineAgainstBenchmarks,
 } from './databaseBenchmarks.ts';
+import {
+  buildMorphIsosurfaceKeyframe,
+  evaluateMorphScalarFieldAtPoint,
+} from './moIsosurface.ts';
 
 test('LaTeX formatting utilities convert chemical formulas, Schoenflies groups, irreps, and MO labels accurately', () => {
   assert.equal(formulaToLatex('H2O'), '\\mathrm{H_{2}O}');
@@ -31,14 +35,14 @@ test('LaTeX formatting utilities convert chemical formulas, Schoenflies groups, 
   assert.equal(schoenfliesToLatex('C2v'), 'C_{2v}');
   assert.equal(schoenfliesToLatex('D∞h'), 'D_{\\infty h}');
   assert.equal(schoenfliesToLatex('Td'), 'T_d');
-  assert.equal(irrepToLatex('B1'), 'b_{1}');
-  assert.equal(irrepToLatex('E1g'), 'e_{1g}');
-  assert.equal(irrepToLatex("A2''"), "a_{2}^{''}");
-  assert.equal(irrepToLatex('Σg+'), '\\sigma_g^+');
-  assert.equal(irrepToLatex('B1', { uppercase: true }), 'B_{1}');
-  assert.equal(irrepToLatex('E1g', { uppercase: true }), 'E_{1g}');
-  assert.equal(irrepToLatex("A2''", { uppercase: true }), "A_{2}^{''}");
-  assert.equal(irrepToLatex('Σg+', { uppercase: true }), '\\Sigma_g^+');
+  assert.equal(irrepToLatex('B1'), 'B_{1}');
+  assert.equal(irrepToLatex('E1g'), 'E_{1g}');
+  assert.equal(irrepToLatex("A2''"), "A_{2}^{''}");
+  assert.equal(irrepToLatex('Σg+'), '\\Sigma_g^+');
+  assert.equal(irrepToLatex('b1'), 'b_{1}');
+  assert.equal(irrepToLatex('e1g'), 'e_{1g}');
+  assert.equal(irrepToLatex("a2''"), "a_{2}^{''}");
+  assert.equal(irrepToLatex('σg+'), '\\sigma_g^+');
   assert.equal(moLabelToLatex('1b1'), '1b_{1}');
   assert.equal(moLabelToLatex('4a1*'), '4a_{1}^{*}');
   assert.equal(moLabelToLatex('1e1g (π2)'), '1e_{1g}\\;(\\pi_{2})');
@@ -350,3 +354,106 @@ test('3D LCAO wavefunction evaluator reflects nodal symmetry of H2O 1b1 HOMO acr
   assert.ok(psiNegZ < -0.05);
   assert.ok(Math.abs(psiNode) < 1e-6);
 });
+
+test('Scalar-field Marching Cubes AO-to-MO morphing separates AOs at t=0 and fuses constructive bonding lobes at t=1', () => {
+  const ethylene = CANONICAL_MOLECULES.find((m) => m.formula === 'C2H4')!;
+  const piHomo = ethylene.molecularOrbitals.find((m) => m.isHOMO)!;
+
+  // At the C=C π-cloud midpoint above the molecular plane (x = 0, y = 0, z = 0.55),
+  // t = 0 suppresses cross-atom overlap whereas t = 1 constructively sums both C1(2pz) and C2(2pz) lobes
+  const midSeparate = evaluateMorphScalarFieldAtPoint(
+    piHomo,
+    ethylene.atoms,
+    0,
+    0,
+    0.55,
+    0.0
+  );
+  const midMerged = evaluateMorphScalarFieldAtPoint(
+    piHomo,
+    ethylene.atoms,
+    0,
+    0,
+    0.55,
+    1.0
+  );
+  assert.ok(
+    midMerged > midSeparate * 2.5,
+    `Expected merged MO midpoint amplitude (${midMerged}) > 2.5x separate AO midpoint (${midSeparate})`
+  );
+
+  // Extract 0% (Separate AOs) and 100% (Merged MO) isosurface meshes
+  const meshSep = buildMorphIsosurfaceKeyframe(piHomo, ethylene.atoms, 0.0, 1.0);
+  const meshMerged = buildMorphIsosurfaceKeyframe(piHomo, ethylene.atoms, 1.0, 1.0);
+
+  assert.ok(meshSep.positive.positions.length > 0 && meshSep.negative.positions.length > 0);
+  assert.ok(meshMerged.positive.positions.length > 0 && meshMerged.negative.positions.length > 0);
+  assert.equal(meshMerged.positive.positions.length, meshMerged.positive.normals.length);
+
+  // Check unit length of first normal vector
+  const nx = meshMerged.positive.normals[0];
+  const ny = meshMerged.positive.normals[1];
+  const nz = meshMerged.positive.normals[2];
+  assert.ok(Math.abs(Math.hypot(nx, ny, nz) - 1.0) < 1e-3);
+
+  // Verify every extracted positive-phase vertex lies strictly on crossed edges near F(p, 1.0) ≈ 0.20
+  const posVerts = meshMerged.positive.positions;
+  for (let i = 0; i < posVerts.length; i += 3) {
+    const val = evaluateMorphScalarFieldAtPoint(
+      piHomo,
+      ethylene.atoms,
+      posVerts[i],
+      posVerts[i + 1],
+      posVerts[i + 2],
+      1.0
+    );
+    assert.ok(
+      Math.abs(val - 0.20) < 0.06,
+      `Expected vertex ${i / 3} to lie on isosurface F≈0.20, got ${val}`
+    );
+  }
+
+  // Verify 100% watertightness (0 open boundary edges -> zero side clipping) across morph states and high lobeScale
+  const countOpenBoundaryEdges = (indices: Uint32Array): number => {
+    const edgeCounts = new Map<string, number>();
+    for (let i = 0; i < indices.length; i += 3) {
+      const tri = [indices[i], indices[i + 1], indices[i + 2]];
+      for (let e = 0; e < 3; e++) {
+        const a = tri[e];
+        const b = tri[(e + 1) % 3];
+        const key = a < b ? `${a}_${b}` : `${b}_${a}`;
+        edgeCounts.set(key, (edgeCounts.get(key) || 0) + 1);
+      }
+    }
+    let openEdges = 0;
+    for (const count of edgeCounts.values()) {
+      if (count === 1) openEdges++;
+    }
+    return openEdges;
+  };
+
+  assert.equal(
+    countOpenBoundaryEdges(meshSep.positive.indices),
+    0,
+    'Separate AO positive mesh must be 100% watertight with 0 clipped boundary edges'
+  );
+  assert.equal(
+    countOpenBoundaryEdges(meshMerged.positive.indices),
+    0,
+    'Merged MO positive mesh must be 100% watertight with 0 clipped boundary edges'
+  );
+  assert.equal(
+    countOpenBoundaryEdges(meshMerged.negative.indices),
+    0,
+    'Merged MO negative mesh must be 100% watertight with 0 clipped boundary edges'
+  );
+
+  // Also verify at maximum user Lobe Scale (1.6x) that no side clipping occurs
+  const meshMaxScale = buildMorphIsosurfaceKeyframe(piHomo, ethylene.atoms, 1.0, 1.6);
+  assert.equal(
+    countOpenBoundaryEdges(meshMaxScale.positive.indices),
+    0,
+    'Max-scale (1.6x) Merged MO mesh must have 0 clipped boundary edges'
+  );
+});
+

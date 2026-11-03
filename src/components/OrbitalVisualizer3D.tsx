@@ -8,6 +8,7 @@ import {
   MoleculeEntry,
 } from '../chemistry/moleculesData';
 import { evaluateOrbitalWavefunction } from '../chemistry/moEngine';
+import { buildMorphIsosurfaceKeyframe } from '../chemistry/moIsosurface';
 import { PointGroupData } from '../chemistry/symmetryData';
 import {
   formulaToLatex,
@@ -19,6 +20,8 @@ import { Latex } from './Latex';
 import {
   ChevronDown,
   ChevronUp,
+  Pause,
+  Play,
   Sun,
 } from 'lucide-react';
 
@@ -28,6 +31,8 @@ interface OrbitalVisualizer3DProps {
   pointGroup: PointGroupData;
   highlightedSymmetryElementId?: string | null;
 }
+
+const MORPH_KEYFRAME_STEPS = 40; // 41 high-density keyframes (2.5% increments: 0/40 .. 40/40)
 
 export const OrbitalVisualizer3D: React.FC<OrbitalVisualizer3DProps> = ({
   molecule,
@@ -39,15 +44,20 @@ export const OrbitalVisualizer3D: React.FC<OrbitalVisualizer3DProps> = ({
   const requestRenderRef = useRef<(() => void) | null>(null);
   const resetCameraRef = useRef<((preset?: 'iso' | 'top' | 'front' | 'side') => void) | null>(null);
   const rebuildSceneRef = useRef<(() => void) | null>(null);
+  const updateMorphFastRef = useRef<((tProgress: number) => void) | null>(null);
 
   const [lobeScale, setLobeScale] = useState<number>(1.0);
   const [orbitalOpacity, setOrbitalOpacity] = useState<number>(0.68);
-  const [renderMode, setRenderMode] = useState<'lobes' | 'cloud' | 'wireframe'>('lobes');
+  const [renderMode, setRenderMode] = useState<'lobes' | 'merged' | 'cloud' | 'wireframe'>('merged');
+  const [morphProgress, setMorphProgress] = useState<number>(1.0);
+  const [isMorphPlaying, setIsMorphPlaying] = useState<boolean>(false);
   const [showSymmetryElements, setShowSymmetryElements] = useState<boolean>(true);
   const [showNodalPlanes, setShowNodalPlanes] = useState<boolean>(true);
   const [darkStage, setDarkStage] = useState<boolean>(true);
   const [colorblindPalette, setColorblindPalette] = useState<boolean>(false);
   const [dockCollapsed, setDockCollapsed] = useState<boolean>(true);
+
+  const morphStartLinearRef = useRef<number>(0);
 
   // Store mutable props in ref so WebGL lifecycle never tears down on prop change
   const stateRef = useRef({
@@ -58,6 +68,8 @@ export const OrbitalVisualizer3D: React.FC<OrbitalVisualizer3DProps> = ({
     lobeScale,
     orbitalOpacity,
     renderMode,
+    morphProgress,
+    isMorphPlaying,
     showSymmetryElements,
     showNodalPlanes,
     darkStage,
@@ -72,10 +84,88 @@ export const OrbitalVisualizer3D: React.FC<OrbitalVisualizer3DProps> = ({
     lobeScale,
     orbitalOpacity,
     renderMode,
+    morphProgress,
+    isMorphPlaying,
     showSymmetryElements,
     showNodalPlanes,
     darkStage,
     colorblindPalette,
+  };
+
+  // Stop active playback when user switches molecule
+  useEffect(() => {
+    setIsMorphPlaying(false);
+  }, [molecule.id]);
+
+  // Smooth 60 FPS cosine ease-in-out playback loop for AO -> MO morphing animation
+  useEffect(() => {
+    if (!isMorphPlaying) return;
+
+    let rafId = 0;
+    const startWallTime = performance.now();
+    const startU = morphStartLinearRef.current;
+    const totalDurationMs = 2400; // 2.4s silky fusion transition
+    const remainingDurationMs = Math.max(200, (1 - startU) * totalDurationMs);
+
+    const stepAnimation = (now: number) => {
+      const elapsed = Math.max(0, now - startWallTime);
+      const frac = Math.min(1, elapsed / remainingDurationMs);
+      const u = startU + frac * (1 - startU);
+      // Cosine ease-in-out curve for natural acceleration and gentle settling into the merged MO
+      const easedT = 0.5 * (1 - Math.cos(Math.PI * u));
+
+      stateRef.current.morphProgress = easedT;
+      updateMorphFastRef.current?.(easedT);
+      setMorphProgress(easedT);
+
+      if (frac >= 1.0) {
+        setIsMorphPlaying(false);
+        return;
+      }
+
+      rafId = requestAnimationFrame(stepAnimation);
+    };
+
+    rafId = requestAnimationFrame(stepAnimation);
+
+    return () => {
+      cancelAnimationFrame(rafId);
+    };
+  }, [isMorphPlaying]);
+
+  const handleTogglePlayMorph = () => {
+    if (renderMode !== 'merged' && renderMode !== 'wireframe') {
+      setRenderMode('merged');
+    }
+    if (!isMorphPlaying) {
+      // If already near 100% (Merged MO), restart from 0% (Separate AOs)
+      const startVal = morphProgress >= 0.96 ? 0 : morphProgress;
+      // Invert cosine ease-in-out so resuming mid-scrub starts seamlessly without a jump
+      morphStartLinearRef.current =
+        startVal <= 0
+          ? 0
+          : startVal >= 1
+            ? 0
+            : Math.acos(Math.max(-1, Math.min(1, 1 - 2 * startVal))) / Math.PI;
+      if (startVal === 0) {
+        stateRef.current.morphProgress = 0;
+        updateMorphFastRef.current?.(0);
+        setMorphProgress(0);
+      }
+      setIsMorphPlaying(true);
+    } else {
+      setIsMorphPlaying(false);
+    }
+  };
+
+  const handleScrubMorph = (nextValue: number) => {
+    setIsMorphPlaying(false);
+    if (renderMode !== 'merged' && renderMode !== 'wireframe') {
+      setRenderMode('merged');
+    }
+    stateRef.current.morphProgress = nextValue;
+    updateMorphFastRef.current?.(nextValue);
+    setMorphProgress(nextValue);
   };
 
   useEffect(() => {
@@ -184,14 +274,13 @@ export const OrbitalVisualizer3D: React.FC<OrbitalVisualizer3DProps> = ({
     const torusCollarGeo = new THREE.TorusGeometry(1.03, 0.07, 12, 28);
     const cylinderGeo = new THREE.CylinderGeometry(1, 1, 1, 18);
 
-    // Deformed teardrop lobe geometry for p/d orbital lobes
+    // Deformed teardrop lobe geometry for discrete LCAO lobes mode
     const lobeGeo = new THREE.SphereGeometry(0.65, 26, 20);
     const posAttr = lobeGeo.attributes.position;
     const vTemp = new THREE.Vector3();
     for (let i = 0; i < posAttr.count; i++) {
       vTemp.fromBufferAttribute(posAttr, i);
-      // Shift center along +Y so lobe emanates from nucleus at y=0 to y=1.3
-      const ny = (vTemp.y + 0.65) / 1.3; // 0 at base, 1 at tip
+      const ny = (vTemp.y + 0.65) / 1.3;
       const pinch = Math.pow(ny, 0.55) * 1.15;
       vTemp.x *= pinch;
       vTemp.z *= pinch;
@@ -199,6 +288,125 @@ export const OrbitalVisualizer3D: React.FC<OrbitalVisualizer3DProps> = ({
       posAttr.setXYZ(i, vTemp.x, vTemp.y, vTemp.z);
     }
     lobeGeo.computeVertexNormals();
+
+    // Pre-cached Marching Cubes / Tetrahedra keyframe geometries for active orbital
+    let activeCacheScopeKey = '';
+    let prewarmTimerId = 0;
+    let activePosIsoMesh: THREE.Mesh | null = null;
+    let activeNegIsoMesh: THREE.Mesh | null = null;
+
+    const morphKeyframeCache = new Map<
+      number,
+      { posGeo: THREE.BufferGeometry; negGeo: THREE.BufferGeometry }
+    >();
+
+    const clearMorphKeyframeCache = () => {
+      if (prewarmTimerId) {
+        clearTimeout(prewarmTimerId);
+        prewarmTimerId = 0;
+      }
+      for (const entry of morphKeyframeCache.values()) {
+        entry.posGeo.dispose();
+        entry.negGeo.dispose();
+      }
+      morphKeyframeCache.clear();
+    };
+
+    const buildKeyframeStep = (
+      mol: MoleculeEntry,
+      mo: MolecularOrbital,
+      scaleMult: number,
+      stepIdx: number
+    ) => {
+      const existing = morphKeyframeCache.get(stepIdx);
+      if (existing) return existing;
+
+      const quantizedT = stepIdx / MORPH_KEYFRAME_STEPS;
+      const isoData = buildMorphIsosurfaceKeyframe(mo, mol.atoms, quantizedT, scaleMult);
+
+      const posGeo = new THREE.BufferGeometry();
+      if (isoData.positive.positions.length > 0) {
+        posGeo.setAttribute(
+          'position',
+          new THREE.BufferAttribute(isoData.positive.positions, 3)
+        );
+        posGeo.setAttribute(
+          'normal',
+          new THREE.BufferAttribute(isoData.positive.normals, 3)
+        );
+        posGeo.setIndex(new THREE.BufferAttribute(isoData.positive.indices, 1));
+        posGeo.computeBoundingSphere();
+      }
+
+      const negGeo = new THREE.BufferGeometry();
+      if (isoData.negative.positions.length > 0) {
+        negGeo.setAttribute(
+          'position',
+          new THREE.BufferAttribute(isoData.negative.positions, 3)
+        );
+        negGeo.setAttribute(
+          'normal',
+          new THREE.BufferAttribute(isoData.negative.normals, 3)
+        );
+        negGeo.setIndex(new THREE.BufferAttribute(isoData.negative.indices, 1));
+        negGeo.computeBoundingSphere();
+      }
+
+      const pair = { posGeo, negGeo };
+      morphKeyframeCache.set(stepIdx, pair);
+      return pair;
+    };
+
+    const scheduleKeyframePrewarm = (
+      mol: MoleculeEntry,
+      mo: MolecularOrbital,
+      scaleMult: number
+    ) => {
+      if (prewarmTimerId) {
+        clearTimeout(prewarmTimerId);
+        prewarmTimerId = 0;
+      }
+      let nextStep = 0;
+      const warmNextSlice = () => {
+        const start = performance.now();
+        while (nextStep <= MORPH_KEYFRAME_STEPS && performance.now() - start < 8) {
+          if (!morphKeyframeCache.has(nextStep)) {
+            buildKeyframeStep(mol, mo, scaleMult, nextStep);
+          }
+          nextStep++;
+        }
+        if (nextStep <= MORPH_KEYFRAME_STEPS) {
+          prewarmTimerId = window.setTimeout(warmNextSlice, 12);
+        } else {
+          prewarmTimerId = 0;
+        }
+      };
+      prewarmTimerId = window.setTimeout(warmNextSlice, 24);
+    };
+
+    const getOrCreateMorphKeyframeGeometries = (
+      mol: MoleculeEntry,
+      mo: MolecularOrbital,
+      scaleMult: number,
+      tProgress: number
+    ) => {
+      const atomSig = mol.atoms
+        .slice(0, 8)
+        .map((a) => `${a.id}:${a.x3d.toFixed(2)},${a.y3d.toFixed(2)},${a.z3d.toFixed(2)}`)
+        .join('|');
+      const scopeKey = `${mol.id}_${mol.atoms.length}_${atomSig}__${mo.id}_${mo.label}__${scaleMult.toFixed(2)}`;
+      if (scopeKey !== activeCacheScopeKey) {
+        clearMorphKeyframeCache();
+        activeCacheScopeKey = scopeKey;
+        scheduleKeyframePrewarm(mol, mo, scaleMult);
+      }
+
+      const stepIdx = Math.max(
+        0,
+        Math.min(MORPH_KEYFRAME_STEPS, Math.round(tProgress * MORPH_KEYFRAME_STEPS))
+      );
+      return buildKeyframeStep(mol, mo, scaleMult, stepIdx);
+    };
 
     let frameId = 0;
     let renderBusy = false;
@@ -249,6 +457,43 @@ export const OrbitalVisualizer3D: React.FC<OrbitalVisualizer3DProps> = ({
 
     requestRenderRef.current = requestRender;
 
+    // Fast O(1) morph geometry swap without rebuilding atoms, bonds, or symmetry elements
+    updateMorphFastRef.current = (tProgress: number) => {
+      const {
+        molecule: mol,
+        selectedMo: mo,
+        lobeScale: scaleMult,
+        renderMode: mode,
+      } = stateRef.current;
+
+      if (
+        !mo ||
+        (mode !== 'merged' && mode !== 'wireframe') ||
+        !activePosIsoMesh ||
+        !activeNegIsoMesh
+      ) {
+        return;
+      }
+
+      const { posGeo, negGeo } = getOrCreateMorphKeyframeGeometries(
+        mol,
+        mo,
+        scaleMult,
+        tProgress
+      );
+
+      activePosIsoMesh.geometry = posGeo;
+      activePosIsoMesh.visible =
+        !!posGeo.attributes.position && posGeo.attributes.position.count > 0;
+
+      activeNegIsoMesh.geometry = negGeo;
+      activeNegIsoMesh.visible =
+        !!negGeo.attributes.position && negGeo.attributes.position.count > 0;
+
+      controls.update();
+      renderer.render(scene, camera);
+    };
+
     let lastFramedMoleculeId = '';
     let currentCamDist = 6.2;
 
@@ -269,7 +514,8 @@ export const OrbitalVisualizer3D: React.FC<OrbitalVisualizer3DProps> = ({
     };
 
     const buildMolecularAndOrbitalScene = () => {
-      // Clear previous children & dispose dynamic materials
+      activePosIsoMesh = null;
+      activeNegIsoMesh = null;
       while (contentGroup.children.length > 0) {
         const child = contentGroup.children[0];
         contentGroup.remove(child);
@@ -283,13 +529,13 @@ export const OrbitalVisualizer3D: React.FC<OrbitalVisualizer3DProps> = ({
         lobeScale: scaleMult,
         orbitalOpacity: opacityVal,
         renderMode: mode,
+        morphProgress: tMorph,
         showSymmetryElements: showSym,
         showNodalPlanes: showNodes,
         darkStage: isDark,
         colorblindPalette: isCb,
       } = stateRef.current;
 
-      // Compute molecular bounding sphere radius R_mol for dynamic camera framing and stage scaling
       const rMol = Math.max(
         2.2,
         ...mol.atoms.map((a) => Math.hypot(a.x3d, a.y3d, a.z3d))
@@ -297,14 +543,14 @@ export const OrbitalVisualizer3D: React.FC<OrbitalVisualizer3DProps> = ({
       const minY3d =
         mol.atoms.length > 0 ? Math.min(...mol.atoms.map((a) => a.y3d)) : -1.2;
 
-      currentCamDist = Math.max(6.2, rMol * 2.1);
-      controls.maxDistance = Math.max(18, currentCamDist * 2.6);
+      const rOrbital = rMol + 1.25 * Math.max(1.0, scaleMult);
+      currentCamDist = Math.max(7.4, rOrbital * 2.05);
+      controls.maxDistance = Math.max(20, currentCamDist * 2.6);
 
-      // Scale reference floor disc & ring to match molecular footprint
-      const floorScale = Math.max(1.0, rMol / 2.6);
+      const floorScale = Math.max(1.15, rOrbital / 2.8);
       shadowDisc.scale.setScalar(floorScale);
       floorRing.scale.setScalar(floorScale);
-      const floorY = Math.min(-2.23, minY3d - 1.35);
+      const floorY = Math.min(-2.65, minY3d - 1.65);
       shadowDisc.position.y = floorY - 0.02;
       floorRing.position.y = floorY;
 
@@ -312,7 +558,6 @@ export const OrbitalVisualizer3D: React.FC<OrbitalVisualizer3DProps> = ({
       scene.background = new THREE.Color(bgHex);
       scene.fog = new THREE.FogExp2(bgHex, Math.min(0.032, 0.18 / currentCamDist));
 
-      // Auto-frame camera whenever the active molecule changes
       const molKey = `${mol.id}_${mol.atoms.length}`;
       if (molKey !== lastFramedMoleculeId) {
         lastFramedMoleculeId = molKey;
@@ -333,7 +578,6 @@ export const OrbitalVisualizer3D: React.FC<OrbitalVisualizer3DProps> = ({
         const singleAtomGroup = new THREE.Group();
         singleAtomGroup.position.set(atom.x3d, atom.y3d, atom.z3d);
 
-        // Primary CPK sphere
         const matMain = new THREE.MeshStandardMaterial({
           color: new THREE.Color(props.cpkColor),
           roughness: 0.25,
@@ -343,7 +587,6 @@ export const OrbitalVisualizer3D: React.FC<OrbitalVisualizer3DProps> = ({
         sphereMesh.scale.setScalar(radius);
         singleAtomGroup.add(sphereMesh);
 
-        // Secondary metallic equatorial collar ring for visual craft
         const matCollar = new THREE.MeshStandardMaterial({
           color: 0x64748b,
           roughness: 0.55,
@@ -406,7 +649,7 @@ export const OrbitalVisualizer3D: React.FC<OrbitalVisualizer3DProps> = ({
       }
       contentGroup.add(bondGroup);
 
-      // 3. Build 3D Molecular Orbital Lobes
+      // 3. Build 3D Molecular Orbital Representation
       if (mo) {
         const orbitalGroup = new THREE.Group();
         const posHex = isCb ? 0x0d9488 : 0x2563eb;
@@ -415,34 +658,56 @@ export const OrbitalVisualizer3D: React.FC<OrbitalVisualizer3DProps> = ({
         const negEmissive = isCb ? 0xb45309 : 0xb91c1c;
 
         const posMat = new THREE.MeshPhysicalMaterial({
-          color: posHex, // Positive wavefunction phase (+ψ)
+          color: posHex,
           emissive: posEmissive,
-          emissiveIntensity: 0.18,
-          roughness: 0.18,
+          emissiveIntensity: 0.22,
+          roughness: 0.2,
           metalness: 0.05,
           clearcoat: isSoftwareGl ? 0 : 0.6,
           transparent: true,
           opacity: opacityVal,
           wireframe: mode === 'wireframe',
           depthWrite: false,
-          side: THREE.DoubleSide,
+          side: mode === 'wireframe' || mode === 'lobes' ? THREE.DoubleSide : THREE.FrontSide,
         });
 
         const negMat = new THREE.MeshPhysicalMaterial({
-          color: negHex, // Negative wavefunction phase (−ψ)
+          color: negHex,
           emissive: negEmissive,
-          emissiveIntensity: 0.18,
-          roughness: 0.18,
+          emissiveIntensity: 0.22,
+          roughness: 0.2,
           metalness: 0.05,
           clearcoat: isSoftwareGl ? 0 : 0.6,
           transparent: true,
           opacity: opacityVal,
           wireframe: mode === 'wireframe',
           depthWrite: false,
-          side: THREE.DoubleSide,
+          side: mode === 'wireframe' || mode === 'lobes' ? THREE.DoubleSide : THREE.FrontSide,
         });
 
-        if (mode === 'lobes' || mode === 'wireframe') {
+        if (mode === 'merged' || mode === 'wireframe') {
+          // Scalar-Field Marching Cubes / Tetrahedra Isosurface (t = 0 Separate AOs -> t = 1 Merged MO)
+          const { posGeo, negGeo } = getOrCreateMorphKeyframeGeometries(
+            mol,
+            mo,
+            scaleMult,
+            tMorph
+          );
+
+          const posIsoMesh = new THREE.Mesh(posGeo, posMat);
+          posIsoMesh.renderOrder = 2;
+          posIsoMesh.visible =
+            !!posGeo.attributes.position && posGeo.attributes.position.count > 0;
+          orbitalGroup.add(posIsoMesh);
+          activePosIsoMesh = posIsoMesh;
+
+          const negIsoMesh = new THREE.Mesh(negGeo, negMat);
+          negIsoMesh.renderOrder = 2;
+          negIsoMesh.visible =
+            !!negGeo.attributes.position && negGeo.attributes.position.count > 0;
+          orbitalGroup.add(negIsoMesh);
+          activeNegIsoMesh = negIsoMesh;
+        } else if (mode === 'lobes') {
           const isDelocalized = mo.lcao.length > 10;
           const delocBoost = isDelocalized ? 1.28 : 1.0;
 
@@ -478,7 +743,6 @@ export const OrbitalVisualizer3D: React.FC<OrbitalVisualizer3DProps> = ({
                     ? new THREE.Vector3(0, 1, 0)
                     : new THREE.Vector3(0, 0, 1);
 
-              // Positive lobe along +axisVec
               const posLobe = new THREE.Mesh(lobeGeo, primaryMat);
               posLobe.position.copy(atomOrigin);
               posLobe.quaternion.setFromUnitVectors(vUp, axisVec);
@@ -486,7 +750,6 @@ export const OrbitalVisualizer3D: React.FC<OrbitalVisualizer3DProps> = ({
               posLobe.renderOrder = 2;
               orbitalGroup.add(posLobe);
 
-              // Negative lobe along -axisVec
               const negLobe = new THREE.Mesh(lobeGeo, oppositeMat);
               negLobe.position.copy(atomOrigin);
               negLobe.quaternion.setFromUnitVectors(vUp, axisVec.clone().negate());
@@ -494,7 +757,6 @@ export const OrbitalVisualizer3D: React.FC<OrbitalVisualizer3DProps> = ({
               negLobe.renderOrder = 2;
               orbitalGroup.add(negLobe);
             } else if (term.orbital === 'dz2') {
-              // Axial lobes along ±Y and equatorial torus in XZ
               const posLobe = new THREE.Mesh(lobeGeo, primaryMat);
               posLobe.position.copy(atomOrigin);
               posLobe.scale.setScalar(1.05 * weight);
@@ -566,12 +828,12 @@ export const OrbitalVisualizer3D: React.FC<OrbitalVisualizer3DProps> = ({
 
         // 4. Nodal Plane Visualization (ψ = 0 surfaces)
         if (showNodes && mo.nodalPlanes > 0) {
-          const planeSpan = Math.max(4.2, rMol * 1.65);
-          const nodePlaneGeo = new THREE.PlaneGeometry(planeSpan, Math.min(planeSpan, 6.5));
+          const planeSpan = Math.max(5.4, (rMol + 1.2) * 1.7);
+          const nodePlaneGeo = new THREE.PlaneGeometry(planeSpan, Math.min(planeSpan, 7.2));
           const nodePlaneMat = new THREE.MeshBasicMaterial({
             color: isDark ? 0x94a3b8 : 0x475569,
             transparent: true,
-            opacity: 0.16,
+            opacity: 0.14,
             side: THREE.DoubleSide,
             depthWrite: false,
           });
@@ -579,13 +841,15 @@ export const OrbitalVisualizer3D: React.FC<OrbitalVisualizer3DProps> = ({
           const nodeBorderMat = new THREE.LineBasicMaterial({
             color: isDark ? 0x38bdf8 : 0x0284c7,
             transparent: true,
-            opacity: 0.55,
+            opacity: 0.5,
           });
 
           const addNodePlane = (normal: [number, number, number]) => {
             const pGroup = new THREE.Group();
             const mesh = new THREE.Mesh(nodePlaneGeo, nodePlaneMat);
+            mesh.renderOrder = 1;
             const edges = new THREE.LineSegments(nodeBorderGeo, nodeBorderMat);
+            edges.renderOrder = 1;
             pGroup.add(mesh);
             pGroup.add(edges);
             pGroup.quaternion.setFromUnitVectors(
@@ -596,7 +860,6 @@ export const OrbitalVisualizer3D: React.FC<OrbitalVisualizer3DProps> = ({
           };
 
           if (mo.interactionType === 'π' || mo.interactionType === 'π*') {
-            // Horizontal π nodal plane (z = 0)
             addNodePlane([0, 0, 1]);
             if (mo.nodalPlanes >= 2) {
               addNodePlane([1, 0, 0]);
@@ -618,8 +881,8 @@ export const OrbitalVisualizer3D: React.FC<OrbitalVisualizer3DProps> = ({
       // 5. Render 3D Point-Group Symmetry Elements (Cn Axes, σ Mirror Planes, Inversion Center i)
       if (showSym && pg) {
         const symGroup = new THREE.Group();
-        const symAxisSpan = Math.max(4.8, rMol * 2.1);
-        const symPlaneSpan = Math.max(3.8, rMol * 1.6);
+        const symAxisSpan = Math.max(5.8, (rMol + 1.2) * 2.1);
+        const symPlaneSpan = Math.max(5.2, (rMol + 1.2) * 1.65);
         for (const el of pg.elements3D) {
           const isHighlighted = hiSymId === el.id;
           const baseColor = new THREE.Color(el.color);
@@ -643,7 +906,6 @@ export const OrbitalVisualizer3D: React.FC<OrbitalVisualizer3DProps> = ({
             rod.quaternion.setFromUnitVectors(vUp, dir);
             symGroup.add(rod);
 
-            // End-cap n-fold polygon marker
             const tipGeo = new THREE.ConeGeometry(
               0.12,
               0.26,
@@ -655,15 +917,16 @@ export const OrbitalVisualizer3D: React.FC<OrbitalVisualizer3DProps> = ({
             symGroup.add(tip);
           } else if (el.type === 'plane' && el.axis) {
             const normal = new THREE.Vector3(...el.axis).normalize();
-            const planeGeo = new THREE.PlaneGeometry(symPlaneSpan, Math.min(symPlaneSpan, 6.2));
+            const planeGeo = new THREE.PlaneGeometry(symPlaneSpan, Math.min(symPlaneSpan, 7.0));
             const planeMat = new THREE.MeshBasicMaterial({
               color: baseColor,
               transparent: true,
-              opacity: isHighlighted ? 0.28 : 0.1,
+              opacity: isHighlighted ? 0.28 : 0.09,
               side: THREE.DoubleSide,
               depthWrite: false,
             });
             const planeMesh = new THREE.Mesh(planeGeo, planeMat);
+            planeMesh.renderOrder = 1;
             planeMesh.quaternion.setFromUnitVectors(
               new THREE.Vector3(0, 0, 1),
               normal
@@ -685,7 +948,8 @@ export const OrbitalVisualizer3D: React.FC<OrbitalVisualizer3DProps> = ({
         contentGroup.add(symGroup);
       }
 
-      requestRender();
+      controls.update();
+      renderer.render(scene, camera);
     };
 
     rebuildSceneRef.current = buildMolecularAndOrbitalScene;
@@ -698,14 +962,20 @@ export const OrbitalVisualizer3D: React.FC<OrbitalVisualizer3DProps> = ({
     const onControlChange = () => requestRender();
     controls.addEventListener('change', onControlChange);
 
+    let lastWidth = width;
+    let lastHeight = height;
     const onResize = () => {
       if (!container) return;
       const w = container.clientWidth || 640;
       const h = container.clientHeight || 420;
+      if (Math.abs(w - lastWidth) < 2 && Math.abs(h - lastHeight) < 2) return;
+      lastWidth = w;
+      lastHeight = h;
       camera.aspect = w / h;
       camera.updateProjectionMatrix();
       renderer.setSize(w, h);
-      requestRender();
+      controls.update();
+      renderer.render(scene, camera);
     };
     window.addEventListener('resize', onResize);
 
@@ -729,6 +999,7 @@ export const OrbitalVisualizer3D: React.FC<OrbitalVisualizer3DProps> = ({
       controls.dispose();
       cancelAnimationFrame(frameId);
       clearTimeout(frameId);
+      clearMorphKeyframeCache();
       sphereGeo.dispose();
       torusCollarGeo.dispose();
       cylinderGeo.dispose();
@@ -737,7 +1008,7 @@ export const OrbitalVisualizer3D: React.FC<OrbitalVisualizer3DProps> = ({
     };
   }, []);
 
-  // Trigger scene rebuild whenever props or orbital controls change
+  // Trigger full scene rebuild only when structural or shading props change (morphProgress updates orbital geometry in-place via updateMorphFastRef)
   useEffect(() => {
     if (rebuildSceneRef.current) {
       rebuildSceneRef.current();
@@ -756,10 +1027,12 @@ export const OrbitalVisualizer3D: React.FC<OrbitalVisualizer3DProps> = ({
     colorblindPalette,
   ]);
 
+  const morphPercent = Math.round(morphProgress * 100);
+
   return (
     <div className="bg-white border border-slate-200 rounded-lg flex flex-col overflow-hidden relative h-full">
       {/* Top Viewport Header Bar */}
-      <div className="px-3.5 py-2.5 bg-slate-50 border-b border-slate-200 flex items-center justify-between gap-2 shrink-0">
+      <div className="px-3.5 py-2 bg-slate-50 border-b border-slate-200 flex flex-wrap items-center justify-between gap-2 shrink-0">
         <div className="flex items-center gap-2 min-w-0">
           <h2 className="text-sm font-semibold text-slate-900 truncate">
             3D Orbital &amp; Symmetry Stage
@@ -777,15 +1050,53 @@ export const OrbitalVisualizer3D: React.FC<OrbitalVisualizer3DProps> = ({
           </span>
         </div>
 
-        {/* Collapsible 3D Options Button in Header (Collapsed by Default) */}
+        {/* AO -> MO Morph Playback Controls & 3D Options Toggle */}
         <div className="flex items-center gap-2 shrink-0">
-          <div className="hidden sm:flex items-center gap-1.5 text-xs font-mono">
-            <span className={colorblindPalette ? 'text-teal-700 font-semibold' : 'text-blue-700 font-semibold'}>
-              <Latex math="+\psi" />
-            </span>
-            <span className="text-slate-300" aria-hidden="true">/</span>
-            <span className={colorblindPalette ? 'text-amber-700 font-semibold' : 'text-rose-700 font-semibold'}>
-              <Latex math="-\psi" />
+          <div
+            className="flex items-center gap-1.5 bg-white border border-slate-200 rounded px-2 py-0.5"
+            title="Animate or scrub continuous scalar-field Marching Cubes fusion from Separate AOs (0%) to Merged MO (100%)"
+          >
+            <button
+              type="button"
+              data-testid="morph-play-button"
+              onClick={handleTogglePlayMorph}
+              className={`px-2 py-0.5 text-[11px] font-medium rounded transition-colors flex items-center gap-1 whitespace-nowrap shrink-0 ${
+                isMorphPlaying
+                  ? 'bg-blue-600 text-white'
+                  : 'bg-slate-900 text-white hover:bg-slate-800'
+              }`}
+            >
+              {isMorphPlaying ? (
+                <>
+                  <Pause className="w-3 h-3" />
+                  <span>Pause</span>
+                </>
+              ) : (
+                <>
+                  <Play className="w-3 h-3" />
+                  <span>Morph MO</span>
+                </>
+              )}
+            </button>
+
+            <input
+              id="header-morph-slider"
+              data-testid="morph-slider"
+              type="range"
+              aria-label="AO to Merged MO Morph Percentage"
+              min={0}
+              max={1}
+              step={0.01}
+              value={morphProgress}
+              onChange={(e) => handleScrubMorph(parseFloat(e.target.value))}
+              className="w-20 accent-blue-600 cursor-pointer"
+            />
+
+            <span
+              data-testid="morph-percent-label"
+              className="font-mono text-[11px] font-semibold text-slate-700 tabular-nums w-8 text-right whitespace-nowrap"
+            >
+              {morphPercent}%
             </span>
           </div>
 
@@ -793,7 +1104,7 @@ export const OrbitalVisualizer3D: React.FC<OrbitalVisualizer3DProps> = ({
             type="button"
             onClick={() => setDockCollapsed((c) => !c)}
             aria-expanded={!dockCollapsed}
-            className={`px-2.5 py-1 text-xs font-medium rounded border transition-colors flex items-center gap-1 whitespace-nowrap ${
+            className={`px-2.5 py-1 text-xs font-medium rounded border transition-colors flex items-center gap-1 whitespace-nowrap shrink-0 ${
               !dockCollapsed
                 ? 'bg-slate-900 text-white border-slate-900'
                 : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
@@ -818,6 +1129,8 @@ export const OrbitalVisualizer3D: React.FC<OrbitalVisualizer3DProps> = ({
           data-testid="orbital-3d-canvas"
           data-orbital={selectedMo?.label || 'none'}
           data-point-group={pointGroup?.id || 'C2v'}
+          data-render-mode={renderMode}
+          data-morph-percent={morphPercent}
         />
 
         {/* Top-Left Minimal Spec Overlay (100% unobstructed center) */}
@@ -842,6 +1155,16 @@ export const OrbitalVisualizer3D: React.FC<OrbitalVisualizer3DProps> = ({
             {selectedMo?.bondingType} · {selectedMo?.nodalPlanes} Nodal Plane
             {selectedMo?.nodalPlanes === 1 ? '' : 's'}
           </div>
+          {(renderMode === 'merged' || renderMode === 'wireframe') && (
+            <div className="text-[10.5px] text-sky-300 mt-0.5 tabular-nums">
+              Surface:{' '}
+              {morphPercent === 0
+                ? 'Separate AOs (0%)'
+                : morphPercent === 100
+                  ? 'Merged MO Isosurface (100%)'
+                  : `AO → MO Fusion (${morphPercent}%)`}
+            </div>
+          )}
         </div>
 
         {/* Collapsible Bottom Control Dock (Zero Viewport Occlusion) */}
@@ -867,110 +1190,154 @@ export const OrbitalVisualizer3D: React.FC<OrbitalVisualizer3DProps> = ({
           </button>
 
           {!dockCollapsed && (
-            <div className="w-full px-3.5 py-2.5 bg-slate-900/95 border border-slate-700 rounded-lg text-slate-100 shadow-lg flex flex-wrap items-center justify-between gap-3 text-xs">
-              {/* Lobe Scale Slider */}
-              <div className="flex items-center gap-2">
-                <label htmlFor="lobe-scale-slider" className="text-[11px] text-slate-300 font-mono whitespace-nowrap">
-                  Lobe Scale: {lobeScale.toFixed(1)}×
-                </label>
-                <input
-                  id="lobe-scale-slider"
-                  type="range"
-                  min={0.5}
-                  max={1.6}
-                  step={0.1}
-                  value={lobeScale}
-                  onChange={(e) => setLobeScale(parseFloat(e.target.value))}
-                  className="w-20 accent-blue-500 cursor-pointer"
-                />
-              </div>
-
-              {/* Render Mode Selector */}
-              <div className="flex items-center gap-1 bg-slate-800 p-0.5 rounded" role="group" aria-label="Orbital Render Style">
-                {(
-                  [
-                    { id: 'lobes', label: 'LCAO Lobes' },
-                    { id: 'cloud', label: 'ψ Grid Cloud' },
-                    { id: 'wireframe', label: 'Mesh' },
-                  ] as const
-                ).map((m) => (
+            <div className="w-full px-3.5 py-2.5 bg-slate-900/95 border border-slate-700 rounded-lg text-slate-100 shadow-lg flex flex-col gap-2.5 text-xs">
+              {/* Row 1: AO -> MO Morph Scrubber + Lobe Scale Slider */}
+              <div className="flex flex-wrap items-center justify-between gap-3 pb-2 border-b border-slate-800">
+                <div className="flex items-center gap-2">
                   <button
-                    key={m.id}
                     type="button"
-                    onClick={() => setRenderMode(m.id)}
-                    className={`px-2 py-1 text-[11px] font-medium rounded transition-colors whitespace-nowrap shrink-0 ${
-                      renderMode === m.id
+                    onClick={handleTogglePlayMorph}
+                    className={`px-2.5 py-1 text-[11px] font-medium rounded transition-colors flex items-center gap-1 whitespace-nowrap shrink-0 ${
+                      isMorphPlaying
                         ? 'bg-blue-600 text-white'
-                        : 'text-slate-300 hover:text-white'
+                        : 'bg-slate-800 text-slate-100 border border-slate-700 hover:bg-slate-700'
                     }`}
                   >
-                    {m.label}
+                    {isMorphPlaying ? (
+                      <>
+                        <Pause className="w-3 h-3" />
+                        <span>Pause Morph</span>
+                      </>
+                    ) : (
+                      <>
+                        <Play className="w-3 h-3" />
+                        <span>Play AO → MO</span>
+                      </>
+                    )}
                   </button>
-                ))}
+                  <label
+                    htmlFor="dock-morph-slider"
+                    className="text-[11px] text-slate-300 font-mono tabular-nums whitespace-nowrap"
+                  >
+                    Separate AOs (0%) → Merged MO ({morphPercent}%):
+                  </label>
+                  <input
+                    id="dock-morph-slider"
+                    type="range"
+                    min={0}
+                    max={1}
+                    step={0.01}
+                    value={morphProgress}
+                    onChange={(e) => handleScrubMorph(parseFloat(e.target.value))}
+                    className="w-28 accent-blue-500 cursor-pointer"
+                  />
+                </div>
+
+                {/* Lobe Scale Slider */}
+                <div className="flex items-center gap-2">
+                  <label htmlFor="lobe-scale-slider" className="text-[11px] text-slate-300 font-mono tabular-nums whitespace-nowrap">
+                    Scale: {lobeScale.toFixed(1)}×
+                  </label>
+                  <input
+                    id="lobe-scale-slider"
+                    type="range"
+                    min={0.5}
+                    max={1.6}
+                    step={0.1}
+                    value={lobeScale}
+                    onChange={(e) => setLobeScale(parseFloat(e.target.value))}
+                    className="w-20 accent-blue-500 cursor-pointer"
+                  />
+                </div>
               </div>
 
-              {/* Symmetry & Nodal Toggles */}
-              <div className="flex items-center gap-1.5">
-                <button
-                  type="button"
-                  onClick={() => setShowSymmetryElements((s) => !s)}
-                  className={`px-2 py-1 text-[11px] font-medium rounded border transition-colors whitespace-nowrap shrink-0 ${
-                    showSymmetryElements
-                      ? 'bg-teal-600/90 text-white border-teal-500'
-                      : 'bg-slate-800 text-slate-300 border-slate-700 hover:text-white'
-                  }`}
-                >
-                  Symmetry Axes/Planes
-                </button>
+              {/* Row 2: Render Mode Selector, Symmetry/Nodal Toggles & Camera Presets */}
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-1 bg-slate-800 p-0.5 rounded" role="group" aria-label="Orbital Render Style">
+                  {(
+                    [
+                      { id: 'merged', label: 'Merged MO' },
+                      { id: 'lobes', label: 'LCAO Lobes' },
+                      { id: 'cloud', label: 'ψ Grid Cloud' },
+                      { id: 'wireframe', label: 'Mesh' },
+                    ] as const
+                  ).map((m) => (
+                    <button
+                      key={m.id}
+                      type="button"
+                      onClick={() => setRenderMode(m.id)}
+                      className={`px-2 py-1 text-[11px] font-medium rounded transition-colors whitespace-nowrap shrink-0 ${
+                        renderMode === m.id
+                          ? 'bg-blue-600 text-white'
+                          : 'text-slate-300 hover:text-white'
+                      }`}
+                    >
+                      {m.label}
+                    </button>
+                  ))}
+                </div>
 
-                <button
-                  type="button"
-                  onClick={() => setShowNodalPlanes((n) => !n)}
-                  className={`px-2 py-1 text-[11px] font-medium rounded border transition-colors whitespace-nowrap shrink-0 ${
-                    showNodalPlanes
-                      ? 'bg-blue-600/90 text-white border-blue-500'
-                      : 'bg-slate-800 text-slate-300 border-slate-700 hover:text-white'
-                  }`}
-                >
-                  Nodal Planes
-                </button>
-              </div>
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => setShowSymmetryElements((s) => !s)}
+                    className={`px-2 py-1 text-[11px] font-medium rounded border transition-colors whitespace-nowrap shrink-0 ${
+                      showSymmetryElements
+                        ? 'bg-teal-600/90 text-white border-teal-500'
+                        : 'bg-slate-800 text-slate-300 border-slate-700 hover:text-white'
+                    }`}
+                  >
+                    Symmetry Axes/Planes
+                  </button>
 
-              {/* Camera Presets & Stage Theme */}
-              <div className="flex items-center gap-1">
-                <button
-                  type="button"
-                  onClick={() => resetCameraRef.current?.('iso')}
-                  title="Reset 3D Isometric Camera"
-                  className="px-2 py-1 text-[11px] font-medium bg-slate-800 text-slate-200 border border-slate-700 rounded hover:bg-slate-700 transition-colors whitespace-nowrap shrink-0"
-                >
-                  Reset View
-                </button>
-                <button
-                  type="button"
-                  onClick={() => resetCameraRef.current?.('top')}
-                  title="Top-Down Principal Axis View"
-                  className="px-2 py-1 text-[11px] font-medium bg-slate-800 text-slate-200 border border-slate-700 rounded hover:bg-slate-700 transition-colors whitespace-nowrap shrink-0"
-                >
-                  Top (z)
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setColorblindPalette((p) => !p)}
-                  title="Toggle Colorblind-Safe Phase Palette (Teal/Amber vs Blue/Rose)"
-                  className="px-1.5 py-1 text-[11px] font-medium bg-slate-800 text-slate-200 border border-slate-700 rounded hover:bg-slate-700 transition-colors whitespace-nowrap shrink-0"
-                >
-                  {colorblindPalette ? 'Teal/Amber' : 'Blue/Rose'}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setDarkStage((d) => !d)}
-                  title="Toggle Light / Dark 3D Stage"
-                  aria-label="Toggle Light or Dark 3D Stage"
-                  className="p-1.5 bg-slate-800 text-slate-200 border border-slate-700 rounded hover:bg-slate-700 transition-colors shrink-0"
-                >
-                  <Sun className="w-3.5 h-3.5" />
-                </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowNodalPlanes((n) => !n)}
+                    className={`px-2 py-1 text-[11px] font-medium rounded border transition-colors whitespace-nowrap shrink-0 ${
+                      showNodalPlanes
+                        ? 'bg-blue-600/90 text-white border-blue-500'
+                        : 'bg-slate-800 text-slate-300 border-slate-700 hover:text-white'
+                    }`}
+                  >
+                    Nodal Planes
+                  </button>
+                </div>
+
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => resetCameraRef.current?.('iso')}
+                    title="Reset 3D Isometric Camera"
+                    className="px-2 py-1 text-[11px] font-medium bg-slate-800 text-slate-200 border border-slate-700 rounded hover:bg-slate-700 transition-colors whitespace-nowrap shrink-0"
+                  >
+                    Reset View
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => resetCameraRef.current?.('top')}
+                    title="Top-Down Principal Axis View"
+                    className="px-2 py-1 text-[11px] font-medium bg-slate-800 text-slate-200 border border-slate-700 rounded hover:bg-slate-700 transition-colors whitespace-nowrap shrink-0"
+                  >
+                    Top (z)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setColorblindPalette((p) => !p)}
+                    title="Toggle Colorblind-Safe Phase Palette (Teal/Amber vs Blue/Rose)"
+                    className="px-1.5 py-1 text-[11px] font-medium bg-slate-800 text-slate-200 border border-slate-700 rounded hover:bg-slate-700 transition-colors whitespace-nowrap shrink-0"
+                  >
+                    {colorblindPalette ? 'Teal/Amber' : 'Blue/Rose'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setDarkStage((d) => !d)}
+                    title="Toggle Light / Dark 3D Stage"
+                    aria-label="Toggle Light or Dark 3D Stage"
+                    className="p-1.5 bg-slate-800 text-slate-200 border border-slate-700 rounded hover:bg-slate-700 transition-colors shrink-0"
+                  >
+                    <Sun className="w-3.5 h-3.5" />
+                  </button>
+                </div>
               </div>
             </div>
           )}
@@ -979,3 +1346,4 @@ export const OrbitalVisualizer3D: React.FC<OrbitalVisualizer3DProps> = ({
     </div>
   );
 };
+

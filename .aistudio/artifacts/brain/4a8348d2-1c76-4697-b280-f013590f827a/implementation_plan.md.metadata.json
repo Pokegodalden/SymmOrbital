@@ -1,0 +1,6 @@
+{
+  "summary": "Implementation plan for 3D Scalar-Field Marching Cubes AO-to-MO Morphing Animation with Play/Pause controls, interactive 0-100% morph scrubber, and pre-cached adaptive keyframe meshes for 60 FPS playback.",
+  "updatedAt": "2026-11-03T07:29:37.025370091Z",
+  "requestFeedback": true,
+  "userFacing": true
+}
