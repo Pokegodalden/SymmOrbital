@@ -4388,5 +4388,15 @@ export const CANONICAL_MOLECULES: MoleculeEntry[] = [
   },
 ];
 
-
-
+// Normalize all single-electron orbital irreps and reducible representation direct sum decompositions to lowercase
+for (const mol of CANONICAL_MOLECULES) {
+  for (const frag of mol.fragmentOrbitals) {
+    frag.irrep = frag.irrep.toLowerCase().replace(/ς/g, 'σ');
+  }
+  for (const mo of mol.molecularOrbitals) {
+    mo.irrepSymbol = mo.irrepSymbol.toLowerCase().replace(/ς/g, 'σ');
+  }
+  for (const red of mol.reducibleRepresentations) {
+    red.decomposition = red.decomposition.toLowerCase().replace(/ς/g, 'σ');
+  }
+}

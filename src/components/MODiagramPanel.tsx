@@ -426,7 +426,7 @@ export const MODiagramPanel: React.FC<MODiagramPanelProps> = ({
                     const isIrrepMatch =
                       highlightedIrrepId &&
                       (mo.irrepId === highlightedIrrepId ||
-                        mo.irrepSymbol === highlightedIrrepId);
+                        mo.irrepSymbol.toLowerCase() === highlightedIrrepId.toLowerCase());
                     return mo.correlatedFragmentIds.map((fragId) => {
                       const frag = frags.find((f) => f.id === fragId);
                       if (!frag) return null;
@@ -525,7 +525,7 @@ export const MODiagramPanel: React.FC<MODiagramPanelProps> = ({
                       const isIrrepHighlighted =
                         highlightedIrrepId &&
                         (mo.irrepId === highlightedIrrepId ||
-                          mo.irrepSymbol === highlightedIrrepId);
+                          mo.irrepSymbol.toLowerCase() === highlightedIrrepId.toLowerCase());
                       const strokeColor = isSelected
                         ? '#2563EB'
                         : isIrrepHighlighted
@@ -690,7 +690,7 @@ export const MODiagramPanel: React.FC<MODiagramPanelProps> = ({
                   const isIrrepMatch =
                     highlightedIrrepId &&
                     (mo.irrepId === highlightedIrrepId ||
-                      mo.irrepSymbol === highlightedIrrepId);
+                      mo.irrepSymbol.toLowerCase() === highlightedIrrepId.toLowerCase());
                   const spinLatex =
                     mo.occupancy === 2
                       ? '\\uparrow\\downarrow\\;(2e^-)'

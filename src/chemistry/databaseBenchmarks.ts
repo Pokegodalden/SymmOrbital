@@ -826,3 +826,12 @@ export function evaluateEngineAgainstBenchmarks(activeMolecule: MoleculeEntry): 
     activeMoleculeRawEhtHomoEv: Number((activeEht.eigenvalues[activeHomoIdx] ?? -12.0).toFixed(2)),
   };
 }
+
+// Normalize all benchmark orbital irreps to lowercase Mulliken convention
+for (const bench of Object.values(NIST_CCCBDB_BENCHMARKS)) {
+  bench.homoIrrep = bench.homoIrrep.toLowerCase().replace(/ς/g, 'σ');
+  for (const band of bench.pesBands) {
+    band.irrep = band.irrep.toLowerCase().replace(/ς/g, 'σ');
+  }
+}
+

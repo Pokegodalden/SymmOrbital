@@ -31,10 +31,14 @@ test('LaTeX formatting utilities convert chemical formulas, Schoenflies groups, 
   assert.equal(schoenfliesToLatex('C2v'), 'C_{2v}');
   assert.equal(schoenfliesToLatex('D∞h'), 'D_{\\infty h}');
   assert.equal(schoenfliesToLatex('Td'), 'T_d');
-  assert.equal(irrepToLatex('B1'), 'B_{1}');
-  assert.equal(irrepToLatex('E1g'), 'E_{1g}');
-  assert.equal(irrepToLatex("A2''"), "A_{2}^{''}");
-  assert.equal(irrepToLatex('Σg+'), '\\Sigma_g^+');
+  assert.equal(irrepToLatex('B1'), 'b_{1}');
+  assert.equal(irrepToLatex('E1g'), 'e_{1g}');
+  assert.equal(irrepToLatex("A2''"), "a_{2}^{''}");
+  assert.equal(irrepToLatex('Σg+'), '\\sigma_g^+');
+  assert.equal(irrepToLatex('B1', { uppercase: true }), 'B_{1}');
+  assert.equal(irrepToLatex('E1g', { uppercase: true }), 'E_{1g}');
+  assert.equal(irrepToLatex("A2''", { uppercase: true }), "A_{2}^{''}");
+  assert.equal(irrepToLatex('Σg+', { uppercase: true }), '\\Sigma_g^+');
   assert.equal(moLabelToLatex('1b1'), '1b_{1}');
   assert.equal(moLabelToLatex('4a1*'), '4a_{1}^{*}');
   assert.equal(moLabelToLatex('1e1g (π2)'), '1e_{1g}\\;(\\pi_{2})');
@@ -130,7 +134,7 @@ test('NIST Chemistry WebBook PES & NIST CCCBDB benchmark audit achieves 100% poi
     POINT_GROUPS.D2h,
     [12, 0, 0, 0, 0, 0, 4, 8]
   );
-  assert.equal(d2hDecomp.formula, '3Ag + B2g + 2B3g + 3B1u + 2B2u + B3u');
+  assert.equal(d2hDecomp.formula, '3ag + b2g + 2b3g + 3b1u + 2b2u + b3u');
   assert.equal(NIST_CCCBDB_BENCHMARKS.C2H4.pesBands.length, 6);
 });
 
@@ -292,14 +296,14 @@ test('Point group detection, VSEPR 3D reconstruction, and edge-case implicit-H r
 
 test('Great Orthogonality Theorem reducible representation decomposition works for C2v and D6h', () => {
   const c2v = POINT_GROUPS.C2v;
-  // 6 valence basis orbitals of H2O: characters [6, 0, 2, 4] -> 3A1 + B1 + 2B2
+  // 6 valence basis orbitals of H2O: characters [6, 0, 2, 4] -> 3a1 + b1 + 2b2
   const decomp = decomposeReducibleRepresentation(c2v, [6, 0, 2, 4]);
-  assert.equal(decomp.formula, '3A1 + B1 + 2B2');
+  assert.equal(decomp.formula, '3a1 + b1 + 2b2');
 
   const d6h = POINT_GROUPS.D6h;
   const benzenePiPreset = d6h.defaultReduciblePresets[0];
   const piDecomp = decomposeReducibleRepresentation(d6h, benzenePiPreset.characters);
-  assert.ok(piDecomp.formula.includes('E1g') && piDecomp.formula.includes('A2u'));
+  assert.ok(piDecomp.formula.includes('e1g') && piDecomp.formula.includes('a2u'));
 });
 
 test('Slater-Koster 4-orbital Extended Hückel solver and Jacobi diagonalizer conserve trace and valence occupancy', () => {

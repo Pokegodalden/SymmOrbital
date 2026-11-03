@@ -216,7 +216,7 @@ export const DatabaseVerificationPanel: React.FC<DatabaseVerificationPanelProps>
                           m.label.toLowerCase().startsWith(baseToken.toLowerCase())
                         ) ||
                         molecule.molecularOrbitals.find(
-                          (m) => m.irrepSymbol === band.irrep
+                          (m) => m.irrepSymbol.toLowerCase() === band.irrep.toLowerCase()
                         ) ||
                         molecule.molecularOrbitals[idx];
                       const calcIp = matchedMo ? -matchedMo.energy : band.experimentalIpEv;

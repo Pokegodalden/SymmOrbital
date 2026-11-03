@@ -46,10 +46,13 @@ export function irrepToLatex(irrep: string): string {
 
   // Direct sum e.g. "A1+B1+B2" or "A1 + B2"
   if (trimmed.includes('+')) {
-    // Careful with Σ+ or Σg+ or Σu+
+    // Careful with Σ+ or Σg+ or Σu+ (and lowercase σ+, σg+, σu+)
     if (trimmed === 'Σ+') return '\\Sigma^+';
     if (trimmed === 'Σg+') return '\\Sigma_g^+';
     if (trimmed === 'Σu+') return '\\Sigma_u^+';
+    if (trimmed === 'σ+') return '\\sigma^+';
+    if (trimmed === 'σg+') return '\\sigma_g^+';
+    if (trimmed === 'σu+') return '\\sigma_u^+';
     if (trimmed === '4Σ+ + 2Π') return '4\\Sigma^+ \\oplus 2\\Pi';
     if (trimmed === 'Σg+ + Σu+') return '\\Sigma_g^+ \\oplus \\Sigma_u^+';
     if (trimmed === 'Σu++Πu') return '\\Sigma_u^+ \\oplus \\Pi_u';
@@ -66,7 +69,7 @@ export function irrepToLatex(irrep: string): string {
 }
 
 function singleIrrepTermToLatex(term: string): string {
-  const m = term.trim().match(/^(\d*)([A-Za-zΣΠΔ])([0-9gu'+\-*]*)$/);
+  const m = term.trim().match(/^(\d*)([A-Za-zΣΠΔσπδ])([0-9gu'+\-*]*)$/);
   if (!m) return term;
   const [, coeff, base, suffix] = m;
 
@@ -74,6 +77,9 @@ function singleIrrepTermToLatex(term: string): string {
   if (base === 'Σ') baseTex = '\\Sigma';
   else if (base === 'Π') baseTex = '\\Pi';
   else if (base === 'Δ') baseTex = '\\Delta';
+  else if (base === 'σ') baseTex = '\\sigma';
+  else if (base === 'π') baseTex = '\\pi';
+  else if (base === 'δ') baseTex = '\\delta';
 
   if (!suffix) return `${coeff}${baseTex}`;
 

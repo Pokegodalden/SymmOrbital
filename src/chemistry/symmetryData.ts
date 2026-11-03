@@ -272,7 +272,7 @@ export const POINT_GROUPS: Record<string, PointGroupData> = {
     ],
     defaultReduciblePresets: [
       { id: 'valence_12', label: 'Γ_val (12 Ethylene Valence AOs)', characters: [12, 0, 0, 0, 0, 0, 4, 8], description: 'All 12 valence AOs of C2H4 (2×C 2s,2px,2py,2pz + 4×H 1s) decompose into 3Ag + B2g + 2B3g + 3B1u + 2B2u + B3u' },
-      { id: 'pi_system', label: 'Γ_π (2 Carbon 2px π Orbitals)', characters: [2, -2, 0, 0, 0, 2, 0, -2], description: 'Two out-of-plane 2px orbitals form bonding b3u (π) and antibonding b2g (π*)' },
+      { id: 'pi_system', label: 'Γ_π (2 Carbon 2px π Orbitals)', characters: [2, -2, 0, 0, 0, 2, 0, -2], description: 'Two out-of-plane 2px orbitals form bonding B3u (π) and antibonding B2g (π*)' },
       { id: 'ch_bonds', label: 'Γ_CH (4 C–H σ Bonds)', characters: [4, 0, 0, 0, 0, 0, 0, 4], description: 'Four C–H sigma bonds decompose into Ag + B3g + B1u + B2u' },
     ],
   },
@@ -586,8 +586,10 @@ export function decomposeReducibleRepresentation(
     const rawCoeff = sumContribution / h;
     const coefficient = Math.round(rawCoeff * 100) / 100;
 
+    const lowerSymbol = irrep.symbol.toLowerCase().replace(/ς/g, 'σ');
+
     results.push({
-      irrepSymbol: irrep.symbol,
+      irrepSymbol: lowerSymbol,
       irrepId: irrep.id,
       coefficient,
       sumContribution,
@@ -598,7 +600,7 @@ export function decomposeReducibleRepresentation(
       const roundedInt = Math.abs(coefficient - Math.round(coefficient)) < 0.15
         ? Math.round(coefficient)
         : coefficient;
-      formulaParts.push(roundedInt === 1 ? irrep.symbol : `${roundedInt}${irrep.symbol}`);
+      formulaParts.push(roundedInt === 1 ? lowerSymbol : `${roundedInt}${lowerSymbol}`);
     }
   }
 

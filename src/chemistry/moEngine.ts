@@ -1152,6 +1152,13 @@ export function analyzeMolecularGraph(
           : '2';
 
   // Build dynamic fragment orbitals from actual element VSIEs
+  const firstIrrepLower = (pg.irreps[0]?.symbol || 'a').toLowerCase().replace(/ς/g, 'σ');
+  const secondIrrepLower = (pg.irreps[Math.min(1, pg.irreps.length - 1)]?.symbol || 'b')
+    .toLowerCase()
+    .replace(/ς/g, 'σ');
+  const lastIrrepLower = (pg.irreps[pg.irreps.length - 1]?.symbol || 'b')
+    .toLowerCase()
+    .replace(/ς/g, 'σ');
   const fragmentOrbitals: FragmentOrbital[] = [
     {
       id: 'frag_left_s',
@@ -1159,7 +1166,7 @@ export function analyzeMolecularGraph(
       label: `${primaryAtom?.element || 'C'} ${primShell}s`,
       fragmentName: `${primaryAtom?.element || 'Core'} Valence`,
       energy: primProps.vsieS,
-      irrep: pg.irreps[0]?.symbol || 'A',
+      irrep: firstIrrepLower,
       degeneracy: 1,
       electrons: 2,
     },
@@ -1169,7 +1176,7 @@ export function analyzeMolecularGraph(
       label: `${primaryAtom?.element || 'C'} ${primShell}p (σ / π)`,
       fragmentName: `${primaryAtom?.element || 'Core'} Valence`,
       energy: primProps.vsieP,
-      irrep: pg.irreps[Math.min(1, pg.irreps.length - 1)]?.symbol || 'B',
+      irrep: secondIrrepLower,
       degeneracy: 3,
       electrons: Math.max(1, primProps.valenceElectrons - 2),
     },
@@ -1182,7 +1189,7 @@ export function analyzeMolecularGraph(
           : `Ligand ${peripheralAtom?.element || 'L'} ${periphShell}p SALCs`,
       fragmentName: 'Substituent SALCs',
       energy: peripheralAtom?.element === 'H' ? periphProps.vsieS : periphProps.vsieP,
-      irrep: `${pg.irreps[0]?.symbol || 'A'} + ${pg.irreps[pg.irreps.length - 1]?.symbol || 'B'}`,
+      irrep: `${firstIrrepLower} + ${lastIrrepLower}`,
       degeneracy: 2,
       electrons: 2,
     },
@@ -1345,10 +1352,11 @@ export function analyzeMolecularGraph(
         ) || dim1Irreps[idx % dim1Irreps.length];
     }
 
+    const lowerIrrepSym = irrepObj.symbol.toLowerCase().replace(/ς/g, 'σ');
     molecularOrbitals.push({
       id: `custom_mo_${idx + 1}`,
-      label: `${idx - startIdx + 1}${irrepObj.symbol.toLowerCase()}${bondingType === 'antibonding' ? '*' : ''}`,
-      irrepSymbol: irrepObj.symbol,
+      label: `${idx - startIdx + 1}${lowerIrrepSym}${bondingType === 'antibonding' ? '*' : ''}`,
+      irrepSymbol: lowerIrrepSym,
       irrepId: irrepObj.id,
       energy,
       occupancy: occ,
@@ -1364,7 +1372,7 @@ export function analyzeMolecularGraph(
           ? ['frag_left_s', 'frag_right_salc']
           : ['frag_left_p', 'frag_right_salc'],
       lcao,
-      description: `Extended Hückel LCAO-MO (${interactionType}, ${irrepObj.symbol} symmetry) computed at ε = ${energy.toFixed(2)} eV with ${signChanges} internuclear nodal surface(s).`,
+      description: `Extended Hückel LCAO-MO (${interactionType}, ${lowerIrrepSym} symmetry) computed at ε = ${energy.toFixed(2)} eV with ${signChanges} internuclear nodal surface(s).`,
     });
   }
 

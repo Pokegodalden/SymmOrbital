@@ -70,7 +70,7 @@ export const SymmetryGroupPanel: React.FC<SymmetryGroupPanelProps> = ({
       .filter((r) => r.coefficient > 0)
       .map(
         (r) =>
-          `${r.coefficient === 1 ? '' : r.coefficient}${irrepToLatex(r.irrepSymbol)}`
+          `${r.coefficient === 1 ? '' : r.coefficient}${irrepToLatex(r.irrepSymbol.toLowerCase())}`
       )
       .join(' \\oplus ') || '0';
 
@@ -435,7 +435,7 @@ export const SymmetryGroupPanel: React.FC<SymmetryGroupPanelProps> = ({
                   className="bg-slate-50 px-2.5 py-1 rounded border border-slate-200"
                 >
                   <Latex
-                    math={`a\\!\\left(${irrepToLatex(r.irrepSymbol)}\\right) = \\frac{${r.sumContribution}}{${pointGroup.order}} = \\mathbf{${r.coefficient}}`}
+                    math={`a\\!\\left(${irrepToLatex(r.irrepSymbol.toLowerCase())}\\right) = \\frac{${r.sumContribution}}{${pointGroup.order}} = \\mathbf{${r.coefficient}}`}
                   />
                 </div>
               ))}
