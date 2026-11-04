@@ -437,23 +437,51 @@ export function reconstruct3DGeometryFromVSEPR(
   const cx2d = atoms.reduce((s, a) => s + a.x2d, 0) / atoms.length;
   const cy2d = atoms.reduce((s, a) => s + a.y2d, 0) / atoms.length;
 
-  // Check if genuine 3D depth already exists (e.g. from PubChem 3D-SDF or 3D preset)
-  const maxAbsZ = atoms.reduce((m, a) => Math.max(m, Math.abs(a.z3d || 0)), 0);
-  if (maxAbsZ > 0.08) {
-    const cx3d = atoms.reduce((s, a) => s + a.x3d, 0) / atoms.length;
-    const cy3d = atoms.reduce((s, a) => s + a.y3d, 0) / atoms.length;
-    const cz3d = atoms.reduce((s, a) => s + a.z3d, 0) / atoms.length;
-    return atoms.map((a) => ({
-      ...a,
-      x2d: Number((a.x2d - cx2d).toFixed(2)),
-      y2d: Number((a.y2d - cy2d).toFixed(2)),
-      x3d: Number((a.x3d - cx3d).toFixed(3)),
-      y3d: Number((a.y3d - cy3d).toFixed(3)),
-      z3d: Number((a.z3d - cz3d).toFixed(3)),
-    }));
+  // 1. Canonical alignment for diatomic molecules (e.g. HF, HCl, HBr, CO, NO, O2, N2, F2, Cl2, LiH)
+  // Always align along the internuclear x-axis (y3d = 0, z3d = 0) with the heavier/electronegative atom at -r/2
+  // so 3D symmetry elements (C∞ along x) and σ(px) / π(py, pz) orbitals are 100% aligned.
+  if (atoms.length === 2) {
+    const a0 = atoms[0];
+    const a1 = atoms[1];
+    const rawDist3d = Math.hypot(a1.x3d - a0.x3d, a1.y3d - a0.y3d, a1.z3d - a0.z3d);
+    const covDist =
+      ((ELEMENT_PROPERTIES[a0.element]?.covalentRadius ?? 0.75) +
+        (ELEMENT_PROPERTIES[a1.element]?.covalentRadius ?? 0.75)) *
+      0.96;
+    const bondLen = Number(
+      (rawDist3d >= 0.65 && rawDist3d <= 2.8 ? rawDist3d : covDist).toFixed(3)
+    );
+    const half = Number((bondLen * 0.5).toFixed(3));
+    // Place heavier / non-H atom at -half and lighter / H atom at +half
+    const z0 = ELEMENT_PROPERTIES[a0.element]?.atomicNumber ?? 6;
+    const z1 = ELEMENT_PROPERTIES[a1.element]?.atomicNumber ?? 6;
+    const swapOrder = a0.element === 'H' && a1.element !== 'H' ? true : z0 < z1 && a1.element !== 'H' && a0.element === 'H';
+    const firstX = swapOrder ? half : -half;
+    const secondX = swapOrder ? -half : half;
+
+    return [
+      {
+        ...a0,
+        x2d: Number(firstX.toFixed(2)),
+        y2d: 0,
+        x3d: firstX,
+        y3d: 0,
+        z3d: 0,
+      },
+      {
+        ...a1,
+        x2d: Number(secondX.toFixed(2)),
+        y2d: 0,
+        x3d: secondX,
+        y3d: 0,
+        z3d: 0,
+      },
+    ];
   }
 
-  // Check if molecule has a central atom bonded to all other n = atoms.length - 1 ligands
+  // 2. Check if molecule has a central atom bonded to all other n = atoms.length - 1 ligands (AX_nE_m VSEPR)
+  // Always orient single-center VSEPR molecules (e.g. H2O, H2S, NH3, PH3, BH3, BF3, CH4, SiH4, SO2, SF4, ClF3, PF5, XeOF4, SF6)
+  // into our canonical symmetry axes even when PubChem returns a tilted 3D-SDF conformer.
   const nLig = atoms.length - 1;
   const centerAtom =
     atoms.length >= 3 && atoms.length <= 7
@@ -491,8 +519,20 @@ export function reconstruct3DGeometryFromVSEPR(
     const rCenter = ELEMENT_PROPERTIES[centerAtom.element]?.covalentRadius ?? 0.8;
     // Hypervalent 3c-4e species (lonePairs >= 2 or nLig >= 5) have fractional bond order and slightly longer bonds
     const scaleFactor = lonePairs >= 2 || nLig >= 5 ? 0.98 : 0.96;
-    const getBondLen = (lig: AtomNode) =>
-      Number(((rCenter + (ELEMENT_PROPERTIES[lig.element]?.covalentRadius ?? 0.72)) * scaleFactor).toFixed(2));
+    const maxAbsZInit = atoms.reduce((m, a) => Math.max(m, Math.abs(a.z3d || 0)), 0);
+    const getBondLen = (lig: AtomNode) => {
+      if (maxAbsZInit > 0.08) {
+        const d3d = Math.hypot(
+          lig.x3d - centerAtom.x3d,
+          lig.y3d - centerAtom.y3d,
+          lig.z3d - centerAtom.z3d
+        );
+        if (d3d >= 0.7 && d3d <= 2.8) return Number(d3d.toFixed(3));
+      }
+      return Number(
+        ((rCenter + (ELEMENT_PROPERTIES[lig.element]?.covalentRadius ?? 0.72)) * scaleFactor).toFixed(2)
+      );
+    };
 
     const coords3D = new Map<string, [number, number, number]>();
     coords3D.set(centerAtom.id, [0, 0, 0]);
@@ -500,12 +540,12 @@ export function reconstruct3DGeometryFromVSEPR(
     if (nLig === 2) {
       const r1 = getBondLen(ligands[0]);
       const r2 = getBondLen(ligands[1]);
-      // AX2E0 (CO2, BeF2) or AX2E3 (XeF2) -> Linear along x-axis
+      // AX2E0 (CO2, BeF2, HCN, OCS) or AX2E3 (XeF2) -> Linear along x-axis
       if (lonePairs === 0 || lonePairs >= 3) {
         coords3D.set(ligands[0].id, [-r1, 0, 0]);
         coords3D.set(ligands[1].id, [r2, 0, 0]);
       } else {
-        // AX2E0.5 (NO2, 134.3°), AX2E1 (SO2, O3, 119°), or AX2E2 (H2O, OF2, SCl2, 104.5°) -> Bent in xy plane
+        // AX2E0.5 (NO2, 134.3°), AX2E1 (SO2, O3, 119°), or AX2E2 (H2O, H2S, OF2, SCl2, 104.5°) -> Bent in xy plane
         const totalValence = atoms.reduce(
           (s, a) => s + (ELEMENT_PROPERTIES[a.element]?.valenceElectrons ?? 4),
           -charge
@@ -527,7 +567,7 @@ export function reconstruct3DGeometryFromVSEPR(
       }
     } else if (nLig === 3) {
       if (lonePairs === 0) {
-        // AX3E0 (BF3, SO3, BCl3) -> Trigonal planar in xy plane (z = 0)
+        // AX3E0 (BF3, BH3, SO3, BCl3) -> Trigonal planar in xy plane (z = 0)
         ligands.forEach((lig, idx) => {
           const r = getBondLen(lig);
           const phi = Math.PI / 2 + (idx * 2 * Math.PI) / 3;
@@ -538,7 +578,7 @@ export function reconstruct3DGeometryFromVSEPR(
           ]);
         });
       } else if (lonePairs === 1) {
-        // AX3E1 (NH3, PCl3, NF3) -> Trigonal pyramidal (C3v with C3 along y-axis)
+        // AX3E1 (NH3, PH3, PCl3, NF3) -> Trigonal pyramidal (C3v with C3 along y-axis)
         coords3D.set(centerAtom.id, [0, 0.38, 0]);
         ligands.forEach((lig, idx) => {
           const r = getBondLen(lig);
@@ -562,7 +602,7 @@ export function reconstruct3DGeometryFromVSEPR(
       }
     } else if (nLig === 4) {
       if (lonePairs === 0) {
-        // AX4E0 (CH4, CCl4, SiF4, POCl3) -> Tetrahedral (Td / C3v)
+        // AX4E0 (CH4, SiH4, CCl4, SiF4, POCl3) -> Tetrahedral (Td / C3v)
         const tetDirs: [number, number, number][] = [
           [0.8165, 0.5774, 0],
           [-0.8165, 0.5774, 0],
@@ -672,7 +712,6 @@ export function reconstruct3DGeometryFromVSEPR(
         });
       } else {
         // AX6E1 (XeF6) -> Distorted Monocapped Octahedron (C3v along y-axis)
-        // Upper triad pushed apart by +y lone-pair cap; lower staggered triad compressed toward -y
         for (let i = 0; i < 3; i++) {
           const lig = ligands[i];
           const r = getBondLen(lig);
@@ -711,6 +750,22 @@ export function reconstruct3DGeometryFromVSEPR(
         z3d: c3[2],
       };
     });
+  }
+
+  // Check if genuine 3D depth already exists for larger multi-center molecules (e.g. from PubChem 3D-SDF)
+  const maxAbsZ = atoms.reduce((m, a) => Math.max(m, Math.abs(a.z3d || 0)), 0);
+  if (maxAbsZ > 0.08) {
+    const cx3d = atoms.reduce((s, a) => s + a.x3d, 0) / atoms.length;
+    const cy3d = atoms.reduce((s, a) => s + a.y3d, 0) / atoms.length;
+    const cz3d = atoms.reduce((s, a) => s + a.z3d, 0) / atoms.length;
+    return atoms.map((a) => ({
+      ...a,
+      x2d: Number((a.x2d - cx2d).toFixed(2)),
+      y2d: Number((a.y2d - cy2d).toFixed(2)),
+      x3d: Number((a.x3d - cx3d).toFixed(3)),
+      y3d: Number((a.y3d - cy3d).toFixed(3)),
+      z3d: Number((a.z3d - cz3d).toFixed(3)),
+    }));
   }
 
   // Multi-center 3D tetrahedral z-displacement for flat 2D graphs with tetracoordinate centers (e.g. P in ATP or sp3 C)
@@ -1012,7 +1067,7 @@ export function runExtendedHuckelSolver(
         continue;
       }
 
-      // Direction cosines from atom i to atom j
+      // Direction cosines from atom i to atom j: d = (R_j - R_i) / |R_j - R_i|
       const l = dx / dist;
       const m = dy / dist;
       const n = dz / dist;
@@ -1029,24 +1084,33 @@ export function runExtendedHuckelSolver(
       const S_pp_sigma = 0.30 * decay * orderBoost;
       const S_pp_pi = 0.19 * decay * orderBoost;
 
+      // Exact global-Cartesian Slater-Koster two-center overlap integrals:
+      // - For s on i and p_α on j: lobe of p_α pointing toward i (-d) has sign -d_α
+      // - For p_α on i and s on j: lobe of p_α pointing toward j (+d) has sign +d_α
+      // - For p_α on i and p_β on j: head-on σ overlap has sign -d_α d_β, side-on π has sign +(δ_αβ - d_α d_β)
       let overlapS = 0;
       if (bi.orbital === 's' && bj.orbital === 's') {
         overlapS = S_ss_sigma;
       } else if (bi.orbital === 's' && bj.orbital !== 's') {
-        overlapS = dirMap[bj.orbital] * S_sp_sigma;
+        overlapS = -dirMap[bj.orbital] * S_sp_sigma;
       } else if (bi.orbital !== 's' && bj.orbital === 's') {
-        overlapS = -dirMap[bi.orbital] * S_sp_sigma;
+        overlapS = dirMap[bi.orbital] * S_sp_sigma;
       } else if (bi.orbital !== 's' && bj.orbital !== 's') {
         const di = dirMap[bi.orbital];
         const dj = dirMap[bj.orbital];
         if (bi.orbital === bj.orbital) {
-          overlapS = di * di * S_pp_sigma + (1 - di * di) * S_pp_pi;
+          overlapS = -di * di * S_pp_sigma + (1 - di * di) * S_pp_pi;
         } else {
-          overlapS = di * dj * (S_pp_sigma - S_pp_pi);
+          overlapS = -di * dj * (S_pp_sigma + S_pp_pi);
         }
       }
 
-      const hij = 0.5 * K * (bi.alpha + bj.alpha) * overlapS;
+      // Löwdin-orthogonalized effective EHT coupling: damp deep core-like ns / valence energy mismatches
+      // (such as F 2s at -40.2 eV vs H 1s at -13.6 eV) so deep ns orbitals remain predominantly non-bonding
+      // rather than unphysically distorting the frontier σ and σ* orbitals.
+      const dAlpha = Math.abs(bi.alpha - bj.alpha);
+      const gapDamping = 1.0 / (1.0 + Math.pow(dAlpha / 18.0, 2));
+      const hij = 0.5 * K * (bi.alpha + bj.alpha) * overlapS * (0.35 + 0.65 * gapDamping);
       H[i][j] = hij;
       H[j][i] = hij;
     }
@@ -1209,11 +1273,34 @@ export function analyzeMolecularGraph(
   const molecularOrbitals: MolecularOrbital[] = [];
   let remainingElectrons = Math.max(0, neutralElectrons - startIdx * 2);
 
-  // Exclude d-only Delta irreps when using an sp valence basis
-  const spIrreps = pg.irreps.filter((ir) => !ir.symbol.startsWith('Δ'));
+  // Exclude d-only Delta and multi-electron SigmaMinus irreps when using an s-p valence basis
+  const spIrreps = pg.irreps.filter(
+    (ir) => !ir.symbol.startsWith('Δ') && ir.symbol !== 'Σ-'
+  );
   const candidateIrreps = spIrreps.length > 0 ? spIrreps : pg.irreps;
   const dim1Irreps = candidateIrreps.filter((ir) => ir.dimension === 1);
   const dimMultiIrreps = candidateIrreps.filter((ir) => ir.dimension >= 2);
+
+  // Initialize literature-standard per-irrep Mulliken shell counters (accounting for inner 1s core shells on heavy atoms)
+  const heavyCount = centeredAtoms.filter((a) => a.element !== 'H').length;
+  const irrepShellCounts: Record<string, number> = {};
+  if (startIdx === 0) {
+    if (pg.id === 'Cinfv') {
+      // 1 core σ+ per heavy atom (e.g. HF/HCl -> 1σ+ core, so valence starts at 2σ+, 3σ+, 1π, 4σ+*; CO/NO/HCN -> 2σ+ cores, so valence starts at 3σ+)
+      irrepShellCounts['SigmaPlus'] = Math.max(1, heavyCount);
+    } else if (pg.id === 'Dinfh' && heavyCount === 2) {
+      irrepShellCounts['SigmagPlus'] = 1;
+      irrepShellCounts['SigmauPlus'] = 1;
+    } else if (
+      (pg.id === 'C2v' || pg.id === 'C3v' || pg.id === 'C4v' || pg.id === 'Td') &&
+      heavyCount === 1
+    ) {
+      irrepShellCounts['A1'] = 1;
+    } else if (pg.id === 'D3h' && heavyCount === 1) {
+      irrepShellCounts['A1p'] = 1;
+    }
+  }
+  let degPartnerCount = 0;
 
   for (let idx = startIdx; idx <= endIdx; idx++) {
     const energy = Number(eigenvalues[idx].toFixed(2));
@@ -1260,12 +1347,12 @@ export function analyzeMolecularGraph(
           const oj = basis[j].orbital;
           let sVal = 0;
           if (oi === 's' && oj === 's') sVal = 0.32;
-          else if (oi === 's' && oj !== 's') sVal = dirMap[oj] * 0.28;
-          else if (oi !== 's' && oj === 's') sVal = -dirMap[oi] * 0.28;
+          else if (oi === 's' && oj !== 's') sVal = -dirMap[oj] * 0.28;
+          else if (oi !== 's' && oj === 's') sVal = dirMap[oi] * 0.28;
           else if (oi !== 's' && oj !== 's') {
             const di = dirMap[oi];
             const dj = dirMap[oj];
-            sVal = oi === oj ? di * di * 0.26 + (1 - di * di) * 0.16 : di * dj * 0.10;
+            sVal = oi === oj ? -di * di * 0.26 + (1 - di * di) * 0.16 : -di * dj * (0.26 + 0.16);
           }
           pairOverlap += 2 * ci * cj * sVal;
         }
@@ -1277,7 +1364,7 @@ export function analyzeMolecularGraph(
     const bondingType: MolecularOrbital['bondingType'] =
       bondPopulation > 0.045
         ? 'bonding'
-        : bondPopulation < -0.045 || idx > homoIdx
+        : bondPopulation < -0.02 || (idx > homoIdx && Math.abs(bondPopulation) > 0.01)
           ? 'antibonding'
           : 'non-bonding';
 
@@ -1326,36 +1413,83 @@ export function analyzeMolecularGraph(
       irrepObj =
         candidateIrreps.find((ir) => ir.id === prevMo.irrepId) || candidateIrreps[0];
     } else if (isDegenerate && dimMultiIrreps.length > 0) {
-      // Check central atom participation to distinguish ungerade (central p-orbital active) vs gerade (central node)
-      const centerWeight = primaryAtom
-        ? vec.reduce((s, c, k) => s + (basis[k].atom.id === primaryAtom.id ? c * c : 0), 0)
-        : 0.5;
-      const preferUngerade = centerWeight > 0.08;
-      irrepObj =
-        dimMultiIrreps.find((ir) =>
-          preferUngerade ? ir.symbol.includes('u') : ir.symbol.includes('g')
-        ) || dimMultiIrreps[idx % dimMultiIrreps.length];
+      if (pg.id === 'D3h') {
+        irrepObj =
+          dimMultiIrreps.find((ir) => (isPi ? ir.id === 'Epp' : ir.id === 'Ep')) ||
+          dimMultiIrreps[0];
+      } else {
+        // Check inversion / ungerade vs gerade character
+        const centerWeight = primaryAtom
+          ? vec.reduce((s, c, k) => s + (basis[k].atom.id === primaryAtom.id ? c * c : 0), 0)
+          : 0.5;
+        const preferUngerade =
+          heavyCount === 2 ? bondingType === 'bonding' : centerWeight > 0.08;
+        irrepObj =
+          dimMultiIrreps.find((ir) =>
+            preferUngerade ? ir.symbol.includes('u') : ir.symbol.includes('g')
+          ) || dimMultiIrreps[0];
+      }
     } else if (dim1Irreps.length > 0) {
-      const centerPWeight = primaryAtom
-        ? vec.reduce(
-            (s, c, k) =>
-              s + (basis[k].atom.id === primaryAtom.id && basis[k].orbital !== 's' ? c * c : 0),
-            0
-          )
-        : 0;
-      const preferUngeradeOrB = centerPWeight > 0.12 || signChanges % 2 === 1;
-      irrepObj =
-        dim1Irreps.find((ir) =>
-          preferUngeradeOrB
-            ? ir.symbol.includes('u') || ir.symbol.startsWith('B') || ir.symbol.includes("''")
-            : ir.symbol.includes('g') || ir.symbol.startsWith('A') || ir.symbol.includes('Σ+')
-        ) || dim1Irreps[idx % dim1Irreps.length];
+      if (pg.id === 'Cinfv') {
+        irrepObj = dim1Irreps.find((ir) => ir.id === 'SigmaPlus') || dim1Irreps[0];
+      } else if (pg.id === 'C2v') {
+        const pxWeight = vec.reduce(
+          (s, c, k) => s + (basis[k].orbital === 'px' ? c * c : 0),
+          0
+        );
+        const targetId = isPi ? 'B1' : pxWeight > 0.35 || signChanges % 2 === 1 ? 'B2' : 'A1';
+        irrepObj = dim1Irreps.find((ir) => ir.id === targetId) || dim1Irreps[0];
+      } else if (pg.id === 'C3v' || pg.id === 'C4v') {
+        const centerSPWeight = primaryAtom
+          ? vec.reduce((s, c, k) => s + (basis[k].atom.id === primaryAtom.id ? c * c : 0), 0)
+          : 1;
+        irrepObj =
+          dim1Irreps.find((ir) => (centerSPWeight > 0.05 ? ir.id === 'A1' : ir.id === 'A2')) ||
+          dim1Irreps[0];
+      } else if (pg.id === 'D3h') {
+        const targetId = isPi ? 'A2pp' : 'A1p';
+        irrepObj = dim1Irreps.find((ir) => ir.id === targetId) || dim1Irreps[0];
+      } else {
+        const centerPWeight = primaryAtom
+          ? vec.reduce(
+              (s, c, k) =>
+                s + (basis[k].atom.id === primaryAtom.id && basis[k].orbital !== 's' ? c * c : 0),
+              0
+            )
+          : 0;
+        const preferUngeradeOrB = centerPWeight > 0.12 || signChanges % 2 === 1;
+        irrepObj =
+          dim1Irreps.find((ir) =>
+            preferUngeradeOrB
+              ? ir.symbol.includes('u') || ir.symbol.startsWith('B') || ir.symbol.includes("''")
+              : ir.symbol.includes('g') || ir.symbol.startsWith('A') || ir.symbol.includes('Σ+')
+          ) || dim1Irreps[idx % dim1Irreps.length];
+      }
+    }
+
+    if (isDegenerateWithPrev) {
+      degPartnerCount += 1;
+    } else {
+      degPartnerCount = 0;
+      irrepShellCounts[irrepObj.id] = (irrepShellCounts[irrepObj.id] || 0) + 1;
+    }
+
+    const shellNum = irrepShellCounts[irrepObj.id] || idx - startIdx + 1;
+    let degSuffix = '';
+    if (isDegenerate) {
+      if (irrepObj.symbol.includes('Π')) {
+        degSuffix = degPartnerCount === 0 ? '(x)' : '(y)';
+      } else if (irrepObj.dimension === 3) {
+        degSuffix = ['(x)', '(y)', '(z)'][degPartnerCount % 3];
+      } else {
+        degSuffix = degPartnerCount === 0 ? '(a)' : '(b)';
+      }
     }
 
     const lowerIrrepSym = irrepObj.symbol.toLowerCase().replace(/ς/g, 'σ');
     molecularOrbitals.push({
       id: `custom_mo_${idx + 1}`,
-      label: `${idx - startIdx + 1}${lowerIrrepSym}${bondingType === 'antibonding' ? '*' : ''}`,
+      label: `${shellNum}${lowerIrrepSym}${bondingType === 'antibonding' ? '*' : ''}${degSuffix}`,
       irrepSymbol: lowerIrrepSym,
       irrepId: irrepObj.id,
       energy,

@@ -1,102 +1,88 @@
 # SymmOrbital — Simplified Usage Guide
 
-Welcome to **SymmOrbital**! This quick guide walks you through everything you can do in the application in plain, easy-to-follow steps—no prior computational chemistry setup required.
+Welcome to **SymmOrbital**! This quick-start guide walks you through every workspace panel, interactive control, and 3D visualization tool in the application.
 
 ---
 
-## 1. Pick or Search for a Molecule
+## 1. Searching or Selecting a Molecule (Top Bar & Benchmark Library)
 
-At the top of the page, you have two fast ways to load a molecule:
+At the top of the screen, you can load any molecule in two ways:
 
-1. **Search the Live PubChem Bar**:
-   - Type any chemical name (e.g., `acetone`, `caffeine`, `sulfur tetrafluoride`), chemical formula (`H2O`, `XeF6`, `C6H6`), SMILES string, or PubChem CID (`962`) into the large search bar and press **Search PubChem** (or hit `Enter`).
-   - SymmOrbital automatically fetches 3D coordinates from NCBI PubChem—or reconstructs accurate 3D VSEPR geometry if only a flat 2D record exists.
-2. **Browse Benchmark Molecules**:
-   - Click the **Benchmark Molecules (16 NIST PES Standards)** button right below the search bar to expand curated molecules grouped by category:
-     - **Diatomics & Radicals** ($\mathrm{CO}, \mathrm{NO}$)
-     - **Main-Group & VSEPR** ($\mathrm{H_2O}, \mathrm{NH_3}, \mathrm{CH_4}, \mathrm{CO_2}, \mathrm{BF_3}, \mathrm{SF_6}$)
-     - **Hypervalent & Lone-Pair VSEPR** ($\mathrm{XeF_6}, \mathrm{XeF_4}, \mathrm{SF_4}, \mathrm{ClF_3}, \mathrm{PF_5}$)
-     - **Organic $\pi$-Systems** ($\mathrm{C_2H_4}, \mathrm{CH_2O}, \mathrm{C_6H_6}$)
-
----
-
-## 2. Sketch or Modify Molecules in 2D (Left Pane)
-
-Use the **2D Chemical Sketcher** on the left to build custom molecules or tweak an existing structure:
-
-- **Open Drawing Tools & Elements**:
-  - Click **Tools & Elements** in the top-right corner of the 2D Sketcher pane to reveal bond tools, ring stamps, and element buttons.
-- **Add Bonds & Stereochemistry**:
-  - Choose **— Single**, **═ Double**, **≡ Triple**, **▲ Wedge** (pointing toward you, $+z$), or **┄ Dash** (pointing away from you, $-z$).
-  - Click an empty spot on the grid to place a new bond, click an existing atom to sprout a new bonded atom, or click an existing bond to change its bond order or convert it into a **Wedge** or **Dash** bond.
-- **Change Chemical Elements**:
-  - Select an element (**C, H, O, N, B, F, S, P, Cl, Xe**) from the element palette, or hover over any atom on the canvas and press its letter key on your keyboard.
-- **Quick Keyboard Shortcuts** (while hovering over the 2D canvas):
-  - `1`, `2`, `3`: Switch to Single, Double, or Triple bond tool
-  - `D` or `4`: Switch to **Dashed Bond** (`┄ Dash`) tool
-  - `W`: Switch to **Wedge Bond** (`▲ Wedge`) tool
-  - `V`: Move / Select tool (drag atoms to reposition them)
-  - `Del` or `Backspace`: Delete the hovered atom or bond
-  - `Ctrl+Z` / `Ctrl+Shift+Z`: Undo / Redo
-
-> **Automatic 3D Geometry Reconstruction**: Even though you draw on a flat 2D canvas, SymmOrbital automatically calculates central-atom lone pairs ($AX_nE_m$) and reconstructs true 3D VSEPR geometry (tetrahedral, trigonal pyramidal, seesaw, T-shaped, octahedral, etc.) in the 3D viewer!
+1. **Live PubChem Search**:
+   - Type any chemical name (e.g., `caffeine`, `ferrocene`, `aspirin`), formula, or PubChem CID into the top search box and press **Search**.
+   - SymmOrbital fetches the 3D molecular coordinates directly from the **PubChem PUG REST API**, detects its 3D **Schoenflies Point Group**, and builds its Molecular Orbital (MO) diagram automatically.
+2. **22 Benchmark Molecules (6 Category Tabs)**:
+   - Click **Benchmark Molecules** in the top bar to open the curated **22 NIST PES, CCCBDB & Biomolecular Standards** drawer.
+   - Switch between the 6 category tabs to explore classic and advanced electronic structures:
+     - **Linear ($D_{\infty h} / C_{\infty v}$)**: $\mathrm{H_2}$, $\mathrm{N_2}$ ($s\text{-}p$ mixing), $\mathrm{O_2}$ (triplet diradical), $\mathrm{CO}$, $\mathrm{CO_2}$, $\mathrm{C_2H_2}$.
+     - **Bent & Trigonal ($C_{2v} / D_{3h} / C_{3v} / D_{2h}$)**: $\mathrm{H_2O}$, $\mathrm{H_2CO}$, $\mathrm{B_2H_6}$ (3c-2e bridging bonds), $\mathrm{NH_3}$, $\mathrm{BF_3}$.
+     - **3D Polyhedral ($T_d / O_h$)**: $\mathrm{CH_4}$, $\mathrm{P_4}$ (strained cluster), $\mathrm{SF_6}$.
+     - **Hypervalent ($D_{\infty h} / D_{3h} / C_{4v}$)**: $\mathrm{XeF_2}$, $\mathrm{PF_5}$, $\mathrm{XeOF_4}$.
+     - **Conjugated $\pi$-Systems ($D_{2h} / C_{2h} / D_{6h}$)**: $\mathrm{C_2H_4}$ (Ethylene, full 12-MO manifold), $\mathrm{C_4H_6}$ (1,3-Butadiene), $\mathrm{C_6H_6}$ (Benzene).
+     - **Large molecules ($D_{2h} / C_s$)**: **$\beta$-Carotene ($\mathrm{C_{40}H_{56}}$, 96 atoms)** showcasing delocalized 11-double-bond polyene $\pi \to \pi^*$ frontier orbitals, and **Adenosine Triphosphate / ATP ($\mathrm{C_{10}H_{16}N_5O_{13}P_3}$, 47 atoms)** showcasing adenine $\pi$ vs. triphosphate chain orbitals.
 
 ---
 
-## 3. Explore Molecular Orbitals & Energy Levels (Middle Pane)
+## 2. Drawing Custom Molecules (Left Pane: 2D Sketcher)
 
-The **Molecular Orbital Energy Correlation Diagram** in the middle shows how individual Atomic Orbitals (left and right columns) combine to form Molecular Orbitals (center column):
+Use the **2D Sketcher** on the left to draw or modify any chemical structure:
 
-- **Inspect Any Orbital**:
-  - **Click** any horizontal energy bar in the diagram (or any row in the table below it) to lock that orbital into the 3D viewer.
-  - **Hover** over an energy bar to preview its wavefunction in 3D and highlight the contributing atomic orbitals.
-- **Key Frontier Orbitals**:
-  - **HOMO** (Highest Occupied Molecular Orbital) / **SOMO** (Singly Occupied MO for radicals): Highlighted in blue.
-  - **LUMO** (Lowest Unoccupied Molecular Orbital): Highlighted in amber.
-  - **$\Delta E$ Gap**: Shown in the top badge—larger gaps generally indicate greater electronic stability.
-- **Interactive Controls** (`Options` button in the MO header):
-  - **Charge ($q$)**: Add or remove electrons (`-2` to `+2`) to see how ionization or reduction changes the HOMO, LUMO, and bond order.
-  - **Ground vs. Excited State ($h\nu$)**: Simulate promoting an electron from the HOMO to the LUMO.
-  - **SALC Lines**: Toggle the dashed correlation lines connecting atomic orbitals to molecular orbitals.
+- **Drawing Tools**:
+  - **Select / Move (`V`)**: Click and drag atoms to rearrange geometry.
+  - **Atom (`A`)**: Choose an element from the quick-pick bar ($\mathrm{C, N, O, F, P, S, Cl, H, Xe}$) or click **Periodic Table** for all elements, then click the canvas to place or replace atoms.
+  - **Bonds (`1`, `2`, `3`)**: Draw Single, Double, or Triple covalent bonds between atoms.
+  - **Stereo Wedges (`W` / `D` or `4`)**: Draw **Solid Up Wedges (`W`)** or **Hashed Down Wedges (`D` / `4`)** to define 3D tetrahedral stereocenters, trigonal pyramidal lone pairs, or non-planar geometries.
+  - **Rings**: Stamp Cyclopropane, Cyclobutane, Cyclopentane, Cyclohexane, or Benzene rings with one click.
+  - **Add Hydrogens (`+H`)**: Automatically satisfies open valence shells on all heavy atoms.
+- **Automatic 2D $\to$ 3D VSEPR Reconstruction**: Every edit on the 2D canvas immediately reconstructs a 3D VSEPR geometry, updates the point group badge, and recalculates the MO diagram.
 
 ---
 
-## 4. Interact with the 3D Orbital & Symmetry Stage (Right Pane)
+## 3. Exploring the MO Energy Correlation Diagram (Center Pane)
 
-The **3D Orbital & Symmetry Stage** renders the molecule's 3D structure alongside its quantum-mechanical wavefunction ($\psi_i(\mathbf{r})$):
+The **MO Energy Correlation Diagram** displays how Left/Central Atomic Orbitals and Right/Ligand Symmetry-Adapted Linear Combinations (**SALCs**) combine to form **Molecular Orbitals ($\psi_i$)** in the center column:
 
-- **Mouse & Touch Controls**:
-  - **Left-Click + Drag**: Rotate the 3D molecule and orbital in any direction.
-  - **Scroll Wheel / Pinch**: Zoom in and out.
-  - **Right-Click + Drag**: Pan the camera.
-- **Understand the Colors**:
-  - **Blue Lobes ($\psi > 0$)**: Positive wavefunction phase.
-  - **Red/Amber Lobes ($\psi < 0$)**: Negative wavefunction phase.
-  - Where blue and red lobes meet without overlapping, there is a **nodal plane** (zero electron density).
-- **View Options** (`View Options` button in the 3D header):
-  - **Nodal Plane**: Toggle the translucent nodal surface slicing through the orbital.
-  - **Symmetry Axes**: Toggle 3D rotation axes ($C_n$) and mirror planes ($\sigma$) directly inside the 3D scene.
-  - **Lobe Opacity**: Adjust the transparency slider to see the underlying atomic skeleton clearly.
-  - **Animate $C_n$**: Spin the molecule around its principal symmetry axis.
+- **Selecting & Stepping Through Orbitals**:
+  - Click any **MO energy rung** in the center column to inspect its 3D orbital wavefunction, energy ($\text{eV}$), Mulliken symmetry label ($a_{1g}, e_{1g}, t_2, \pi_u, \dots$), and LCAO formula at the bottom of the diagram.
+  - Use the **`↑` and `↓` buttons** in the MO Diagram header (or your keyboard's **Up / Down arrow keys**) to step smoothly up and down the energy ladder from core $\sigma$ orbitals through the **HOMO–LUMO frontier** to virtual $\pi^*$ and $\sigma^*$ orbitals.
+- **State & Options Menu** (top-right of the MO pane):
+  - **Molecular Charge ($q$)**: Add or remove electrons ($-2$ to $+2$) to observe how **Bond Order**, **HOMO/LUMO**, and **Magnetism** (Diamagnetic vs. Paramagnetic) change in real time.
+  - **Electronic State**: Switch between **Ground State** and **Excited State ($h\nu$)** to promote an electron from the HOMO to the LUMO.
+  - **SALC Correlation Lines**: Toggle the dashed symmetry-matching connector lines between AOs/SALCs and MOs.
+  - **Full MO Level Table (`All Levels →`)**: Toggle inside **State & Options** or click **`All Levels →`** at the bottom-right of the LCAO formula bar to open a complete table of all molecular orbitals, energies, symmetries, and electron occupancies.
 
 ---
 
-## 5. Bottom Reference Dock (Character Tables & Experimental Verification)
+## 4. 3D Orbital Stage & Continuous AO $\to$ MO Wavefunction Morphing (Right Pane)
 
-At the bottom of the screen, click any tab to expand the reference drawer (click the active tab again to collapse it):
+The **3D Orbital & Symmetry Stage** renders the selected Molecular Orbital alongside the molecule's 3D ball-and-stick framework:
 
-1. **Point Group & Character Table**:
-   - Displays the molecule's Schoenflies point group ($C_{2v}, C_{3v}, C_{4v}, D_{3h}, D_{4h}, O_h$, etc.) and Mulliken character table.
-   - **Click any symmetry row** (e.g., $A_1, B_1, E, T_{1u}$) to highlight all molecular orbitals belonging to that symmetry species.
-   - Click a symmetry operation button (like **Rotate $C_n$** or **Reflect $\sigma$**) to watch that operation animate live on the 3D molecule.
+- **AO $\to$ MO Continuous 3D Wavefunction Morphing (`Morph MO` & `0%–100%` Slider)**:
+  - Click **`Morph MO`** in the top-right header of the 3D viewport to play a smooth, continuous 3D quantum animation from **Separate Atomic Orbitals (`0%`)** to the **Merged Molecular Orbital Isosurface (`100%`)**, or drag the **`0%–100%` slider** manually to inspect any intermediate stage:
+    - **`0%` (Separate AOs)**: Displays the unmixed constituent $s, p, d$ atomic orbitals centered on their respective nuclei, weighted by their LCAO coefficients $c_\mu$.
+    - **`1%–99%` (AO $\to$ MO Overlap)**: Watch constructive in-phase lobes (same color/sign) reach across bonds and fuse together into delocalized $\sigma$ or $\pi$ envelopes, while destructive out-of-phase lobes (opposite color/sign) repel and carve out nodal planes.
+    - **`100%` (Merged MO Isosurface)**: Displays the fully formed, watertight 3D Molecular Orbital isosurface ($\psi(\mathbf{r}) = \sum_\mu c_\mu \phi_\mu(\mathbf{r})$).
+- **Camera Controls**:
+  - **Left-click + drag** to rotate in 3D, **Right-click + drag** to pan, and **Scroll** to zoom in or out.
+- **3D Options Menu** (top-right of the 3D viewport):
+  - **Nodal Plane**: Toggle translucent purple nodal surfaces where the wavefunction $\psi = 0$ changes phase sign.
+  - **Symmetry Axes**: Overlay principal rotation axes ($C_n$) and mirror planes ($\sigma_v, \sigma_h, \sigma_d$).
+  - **Spin $C_n$**: Continuously rotate the molecule around its principal symmetry axis to verify whether the orbital is symmetric or antisymmetric.
+  - **Reset Camera**: Snap the 3D camera back to the default orientation and zoom.
+  - **Lobe Opacity (`15%–95%`) & Lobe Scale (`0.5×–1.6×`)**: Adjust the translucency and spatial size of the positive (`+`, red) and negative (`−`, blue) orbital lobes. All lobes remain 100% closed and unclipped even at maximum `1.6×` scale.
+- **Show / Hide 3D Controls (`H` Key)**:
+  - Press **`H`** on your keyboard (or click the floating pill at the bottom of the 3D stage) to expand or collapse the quick 3D camera and display controls bar.
+
+---
+
+## 5. Analytical Inspector Dock (Bottom Collapsible Drawer)
+
+Click any of the three tabs along the bottom bar to expand or collapse the analytical reference drawer:
+
+1. **Point Group & Character Table + $\Gamma_{\text{red}}$ Decomposition Calculator**:
+   - View the complete group theory character table for the active molecule's point group, with the selected MO's irreducible representation highlighted.
+   - **Reducible Representation ($\Gamma_{\text{red}}$) Decomposition Calculator**: Scroll to the calculator inside this tab to decompose any reducible representation into its lower-case Mulliken irreducible direct sum ($\Gamma_{\text{red}} = \bigoplus_i a_i \Gamma_i$) via the Great Orthogonality Theorem. Click a preset basis (**$\Gamma_\sigma$ Bonds**, **$\Gamma_{\text{val}}$ Valence AOs**, **$\Gamma_{3N}$ Total**, **$\Gamma_{\text{vib}}$ Vibrational**, **$\Gamma_\pi$ Out-of-Plane**) or type custom characters $\chi(R)$ for each symmetry class.
 2. **NIST CCCBDB & PES Audit**:
-   - Compares SymmOrbital's calculated orbital energies against real laboratory photoelectron spectroscopy (PES) ionization energies from **NIST CCCBDB**.
+   - Compare computed bond lengths ($r_e$), bond angles ($\theta_e$), first vertical ionization energies ($\text{IE}_1 = -\varepsilon_{\text{HOMO}}$), and orbital eigenvalues against experimental Photoelectron Spectroscopy (PES) literature values.
 3. **PubChem API Inspector**:
-   - Shows the live IUPAC name, SMILES string, PubChem CID, molecular weight, and whether 3D coordinates came from a PubChem MMFF94s 3D conformer or VSEPR 3D reconstruction.
-
----
-
-## 6. Workspace Customization (Top Bar)
-
-- **Dark / Light Mode**: Click the **Moon / Sun icon** in the top navigation bar to switch between Light and Dark themes.
-- **Pro 3-Pane vs. Classic Layout**: Click **Classic Layout** in the top-right corner if you prefer a vertically stacked view with larger individual panels, or switch back to **Pro 3-Pane** to see 2D sketching, MO energy levels, and 3D orbitals side by side.
+   - Inspect live REST API URLs, conformer IDs, response status, and raw JSON payloads returned by PubChem.

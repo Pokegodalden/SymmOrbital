@@ -12,12 +12,14 @@ export interface DualPhaseIsosurfaceData {
   morphT: number;
 }
 
-interface PreparedTerm {
+interface PreparedAtomGroup {
   x: number;
   y: number;
   z: number;
-  weight: number;
-  orbital: LCAOContribution['orbital'];
+  terms: {
+    weight: number;
+    orbital: LCAOContribution['orbital'];
+  }[];
 }
 
 // Kuhn 6-tetrahedra decomposition of a unit cube (vertices 0..7)
@@ -68,35 +70,36 @@ function evalSingleBasis(
   zeta: number
 ): number {
   const radial = Math.exp(-zeta * r);
-  const dDamp = 1.0 / (1.0 + 0.28 * r);
+  const pScale = 1.62 * zeta;
+  const dScale = (1.35 * zeta * zeta) / (1.0 + 0.22 * r);
   let angular = 1.0;
   switch (orbital) {
     case 's':
-      angular = 0.85;
+      angular = 0.78;
       break;
     case 'px':
-      angular = dx * 2.15;
+      angular = dx * pScale;
       break;
     case 'py':
-      angular = dy * 2.15;
+      angular = dy * pScale;
       break;
     case 'pz':
-      angular = dz * 2.15;
+      angular = dz * pScale;
       break;
     case 'dz2':
-      angular = (2 * dy * dy - dx * dx - dz * dz) * 1.45 * dDamp;
+      angular = (2 * dy * dy - dx * dx - dz * dz) * 0.95 * dScale;
       break;
     case 'dx2y2':
-      angular = (dx * dx - dz * dz) * 1.65 * dDamp;
+      angular = (dx * dx - dz * dz) * 1.15 * dScale;
       break;
     case 'dxy':
-      angular = dx * dy * 2.15 * dDamp;
+      angular = dx * dy * 2.15 * dScale;
       break;
     case 'dxz':
-      angular = dx * dz * 2.15 * dDamp;
+      angular = dx * dz * 2.15 * dScale;
       break;
     case 'dyz':
-      angular = dy * dz * 2.15 * dDamp;
+      angular = dy * dz * 2.15 * dScale;
       break;
   }
   return radial * angular;
@@ -104,7 +107,7 @@ function evalSingleBasis(
 
 /**
  * Evaluates the AO-to-MO morphing scalar field F(r, t) at (x, y, z) for morph parameter t in [0, 1].
- * - At t = 0 (Separate AOs): Each voxel is governed by its dominant single-atom basis term with
+ * - At t = 0 (Separate AOs): Each voxel is governed by its dominant atom-centered orbital with
  *   an Inverse Participation Ratio (IPR) cleft factor so adjacent atomic orbitals remain cleanly separated.
  * - At t = 1 (Merged MO): Full coherent LCAO superposition Σ w_k φ_k(r - R_k), producing continuous
  *   fused bonding envelopes (σ sausages, π clouds, delocalized rings) and sharp antibonding nodal planes.
@@ -126,89 +129,142 @@ export function evaluateMorphScalarFieldAtPoint(
   return evalPreparedMorphField(prepared, x, y, z, s, zeta);
 }
 
-function prepareTerms(mo: MolecularOrbital, atoms: AtomNode[]): PreparedTerm[] {
+function prepareTerms(mo: MolecularOrbital, atoms: AtomNode[]): PreparedAtomGroup[] {
   const isDelocalized = mo.lcao.length > 10;
-  const rawTerms: PreparedTerm[] = [];
-  let maxWeight = 0;
+  const gamma = isDelocalized ? 0.56 : 0.70;
 
+  // Group LCAO contributions by atom so intra-atomic hybrid/tilted orbitals preserve linear
+  // directional cosines (rotational invariance) while dynamic-range scaling is applied per atom
+  const byAtom = new Map<string, { atom: AtomNode; entries: LCAOContribution[] }>();
   for (const term of mo.lcao) {
     if (Math.abs(term.coeff) < 0.04) continue;
     const atom = atoms.find((a) => a.id === term.atomId);
     if (!atom) continue;
-    const w =
-      Math.sign(term.coeff) *
-      Math.pow(Math.abs(term.coeff), isDelocalized ? 0.56 : 0.68);
-    if (Math.abs(w) > maxWeight) maxWeight = Math.abs(w);
-    rawTerms.push({
+    let group = byAtom.get(atom.id);
+    if (!group) {
+      group = { atom, entries: [] };
+      byAtom.set(atom.id, group);
+    }
+    group.entries.push(term);
+  }
+
+  const groups: PreparedAtomGroup[] = [];
+  let maxWeight = 0;
+
+  for (const { atom, entries } of byAtom.values()) {
+    let atomNorm2 = 0;
+    for (const e of entries) {
+      atomNorm2 += e.coeff * e.coeff;
+    }
+    const atomNorm = Math.sqrt(atomNorm2);
+    if (atomNorm < 1e-6) continue;
+
+    // Apply nonlinear dynamic-range compression to the total atomic amplitude while preserving
+    // exact linear ratios among (s, px, py, pz) components on the same atom
+    const atomScale = Math.pow(atomNorm, gamma) / atomNorm;
+    const atomTerms: { weight: number; orbital: LCAOContribution['orbital'] }[] = [];
+
+    for (const e of entries) {
+      const w = e.coeff * atomScale;
+      if (Math.abs(w) > maxWeight) maxWeight = Math.abs(w);
+      atomTerms.push({
+        weight: w,
+        orbital: e.orbital,
+      });
+    }
+
+    groups.push({
       x: atom.x3d,
       y: atom.y3d,
       z: atom.z3d,
-      weight: w,
-      orbital: term.orbital,
+      terms: atomTerms,
     });
   }
 
   if (maxWeight > 1e-6) {
     const inv = 1 / maxWeight;
-    for (const rt of rawTerms) {
-      rt.weight *= inv;
+    for (const g of groups) {
+      for (const rt of g.terms) {
+        rt.weight *= inv;
+      }
     }
   }
-  return rawTerms;
+  return groups;
 }
 
 /**
- * Evaluates the C^∞ smooth morphing scalar field using Inverse Participation Ratio (IPR)
- * partitioning at s = smoothstep(t) in [0, 1].
+ * Evaluates the C^∞ smooth morphing scalar field using atom-grouped Inverse Participation Ratio (IPR)
+ * partitioning at t = 0 and Pauli core-excluded constructive/destructive superposition at t = 1.
  */
 function evalPreparedMorphField(
-  prepared: PreparedTerm[],
+  prepared: PreparedAtomGroup[],
   x: number,
   y: number,
   z: number,
   s: number,
   zeta: number
 ): number {
-  let sumPsi = 0;
+  let posSum = 0;
+  let negSum = 0;
+  let posWeight = 0;
+  let negWeight = 0;
   let sumA2 = 0;
   let sumVA2 = 0;
   let sumA4 = 0;
 
   for (let i = 0; i < prepared.length; i++) {
-    const term = prepared[i];
-    const dx = x - term.x;
-    const dy = y - term.y;
-    const dz = z - term.z;
+    const group = prepared[i];
+    const dx = x - group.x;
+    const dy = y - group.y;
+    const dz = z - group.z;
     const r2 = dx * dx + dy * dy + dz * dz;
     // Skip negligible far-field tails (> 6.0 Å away) with smooth C^1 radial taper beyond 4.8 Å
     if (r2 > 36.0) continue;
 
     const r = Math.sqrt(r2);
-    let val = term.weight * evalSingleBasis(term.orbital, dx, dy, dz, r, zeta);
+    let atomVal = 0;
+    for (let j = 0; j < group.terms.length; j++) {
+      const term = group.terms[j];
+      atomVal += term.weight * evalSingleBasis(term.orbital, dx, dy, dz, r, zeta);
+    }
     if (r > 4.8) {
       const u = (r - 4.8) / 1.2;
-      val *= 1 - u * u * (3 - 2 * u);
+      atomVal *= 1 - u * u * (3 - 2 * u);
     }
-    const a2 = val * val;
 
-    sumPsi += val;
+    // Smooth Gaussian Voronoi / Pauli core-locality weight prevents diffuse tails of distant atoms
+    // from erasing inner antibonding lobes across short X-H bonds while keeping exact nodal planes
+    const loc = Math.exp(-2.65 * r2);
+    const a2 = atomVal * atomVal * loc;
+
+    if (atomVal >= 0) {
+      posSum += atomVal;
+      posWeight += a2;
+    } else {
+      negSum += -atomVal;
+      negWeight += a2;
+    }
+
     sumA2 += a2;
-    sumVA2 += val * a2;
+    sumVA2 += atomVal * a2;
     sumA4 += a2 * a2;
   }
 
-  if (s >= 0.999) return sumPsi;
-  if (sumA2 < 1e-12) return 0;
+  const totalWeight = posWeight + negWeight;
+  if (totalWeight < 1e-12) return 0;
 
-  // C^∞ smooth dominant-AO amplitude and Inverse Participation Ratio P(r) in (0, 1]
-  // Near a single atom center: P(r) -> 1.0. At an inter-atomic midpoint: P(r) -> 0.5.
+  // At t = 1 (Merged MO): constructive same-phase terms add linearly (posSum or negSum), while
+  // opposite-phase terms meet at a sharp nodal plane without swallowing neighboring atomic cores
+  const mergedPsi = (posWeight * posSum - negWeight * negSum) / totalWeight;
+  if (s >= 0.999) return mergedPsi;
+
+  // At t = 0 (Separate AOs): C^∞ dominant-atom orbital amplitude and Inverse Participation Ratio P(r)
   const invA2 = 1.0 / sumA2;
   const vSoft = sumVA2 * invA2;
-  const ipr = sumA4 * invA2 * invA2; // in [1/N, 1]
-  // Suppress inter-orbital overlap neck cleanly in the t=0 limit while keeping C^∞ smoothness
-  const sepPsi = vSoft * ipr * ipr;
+  const ipr = sumA4 * invA2 * invA2; // in [1/N_atoms, 1]
+  const sepPsi = vSoft * ipr;
 
-  return (1 - s) * sepPsi + s * sumPsi;
+  return (1 - s) * sepPsi + s * mergedPsi;
 }
 
 /**

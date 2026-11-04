@@ -1,138 +1,94 @@
-[Simplified Usage Guide](./USAGE_GUIDE.md)
+<div align="center">
+  <h1>SymmOrbital</h1>
+  <p><strong>Molecular Orbital & Symmetry Analyzer — Live PubChem API, Interactive 2D/3D Chemical Sketcher, Continuous AO &rarr; MO 3D Wavefunction Morphing & NIST Benchmark Suite</strong></p>
+  <p><a href="./USAGE_GUIDE.md"><strong>&#128214; Simplified Usage Guide</strong></a></p>
+</div>
 
-# ![SymmOrbital Logo](./public/logo-inline.svg) SymmOrbital
+---
 
-> **Interactive quantum chemistry workbench for 2D chemical sketching, VSEPR-aware 3D geometry reconstruction, real-time LCAO-MO energy diagrams, 3D WebGL orbital isosurfaces, and Schoenflies point-group symmetry analysis—benchmarked against NIST CCCBDB & PubChem.**
+## Overview
 
-![TypeScript](https://img.shields.io/badge/TypeScript-5.8-3178C6?logo=typescript&logoColor=white)
-![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=0F172A)
-![Three.js](https://img.shields.io/badge/Three.js-WebGL-000000?logo=threedotjs&logoColor=white)
-![KaTeX](https://img.shields.io/badge/KaTeX-LaTeX_Math-008080?logo=latex&logoColor=white)
-![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)
+**SymmOrbital** is a computational and educational chemistry platform designed for visualizing **Molecular Orbital (MO) Energy Correlation Diagrams**, **Linear Combination of Atomic Orbitals (LCAO-MO)**, **Continuous 3D Atomic-to-Molecular Orbital Wavefunction Morphing**, **Symmetry-Adapted Linear Combinations (SALCs)**, and **3D Schoenflies Point Group Symmetry Elements**.
 
-**SymmOrbital** bridges the gap between static textbook Molecular Orbital (MO) diagrams and research-grade quantum chemistry visualizers. Sketch any molecule in 2D—or query **PubChem** by name, formula, SMILES, or CID—and immediately inspect its 3D $\psi_i(\mathbf{r})$ wavefunction phase lobes, Symmetry-Adapted Linear Combinations (SALCs), Mulliken character tables, and experimental photoelectron spectroscopy benchmarks.
+The application combines a **live PubChem REST API structural resolver**, a **2D/3D chemical structure editor** with stereochemical wedge/dash bonds and VSEPR 3D coordinate reconstruction, a **distance-scaled Extended Hückel / LCAO-MO engine** (supporting $s, p, d$ valence basis sets, hypervalent 3c-4e bonding, conjugated $\pi$-systems, and large macromolecular biomarkers), a **Marching Tetrahedra 3D scalar-field isosurface engine** for real-time AO $\to$ MO topological morphing, and **curated NIST Photoelectron Spectroscopy (PES) & CCCBDB benchmark datasets** for 22 reference molecules.
 
 ---
 
 ## Key Features
 
-### 1. Synchronized 3-Pane Scientific Workbench (with Dark Mode & Reversible Layout)
-- **Pane 1 — Interactive 2D Chemical Sketcher**: Draw single (`—`), double (`═`), triple (`≡`), stereo wedge (`▲`), and **dashed (`┄`)** bonds, stamp rings ($\mathrm{C_6}$, $\mathrm{C_4}$, $\mathrm{C_3}$), or use rapid keyboard shortcuts (`1`/`2`/`3` for bond order, `D`/`4` for dashed bond, `W` for wedge bond, `C`/`N`/`O`/`H`/`F`/`S`/`P`/`Cl`/`Xe` for elements, `Del` to erase).
-- **Pane 2 — Interactive LCAO-MO Correlation Diagram**: Full Fragment AO $\leftrightarrow$ Molecular Orbital $\leftrightarrow$ SALC energy ladder with HOMO/SOMO–LUMO gap ($\Delta E$) telemetry, ionic charge state ($q \in [-2, +2]$), ground vs. excited state ($h\nu$) electron promotion, and complete KaTeX-rendered LCAO expansions.
-- **Pane 3 — 3D WebGL Orbital Isosurface & Symmetry Stage**: Real-time Three.js visualization of positive ($\psi > 0$) and negative ($\psi < 0$) wavefunction phase lobes, nodal surfaces, principal rotation axes ($C_n$), mirror planes ($\sigma_v, \sigma_h, \sigma_d$), and animated point-group symmetry operations.
-- **Dark Mode & Layout Toggle**: Switch seamlessly between Light and Dark themes via the header sun/moon toggle, or toggle between the equal-width **Pro 3-Pane** workbench and the **Classic v1** stacked view.
+### 1. Live PubChem PUG REST API Integration
+- **Universal Compound Search**: Query over 115 million chemical structures by common name, IUPAC name, chemical formula, or PubChem CID.
+- **3D & 2D Coordinate Resolution**: Automatically fetches MMFF94-minimized 3D conformers (`record_type=3d`) from PubChem, with seamless fallback to 2D structural records and automatic VSEPR 3D coordinate generation when 3D conformers are unavailable.
+- **API Payload Inspector**: Inspect live PubChem request URLs, response latency, conformer metadata, and raw JSON payloads directly inside the bottom **PubChem API Inspector** tab.
 
-### 2. VSEPR 3D Coordinate Reconstructor & Lone-Pair Point-Group Engine
-- **Automatic 2D $\to$ 3D VSEPR Coordinate Reconstruction (`reconstruct3DGeometryFromVSEPR`)**: Converts flat 2D sketches and PubChem `2D-SDF` fallbacks (such as hypervalent fluorides where PubChem lacks MMFF94s 3D conformers) into accurate 3D stereochemical coordinates across steric numbers $2\text{--}7$.
-- **Lone-Pair & Radical Domain $AX_nE_m$ Symmetry Solver (`getCentralAtomLonePairs`)**: Computes central-atom non-bonding steric domains $E = \lceil\max(0, V - \sum b_i)/2\rceil$ (counting both lone pairs and odd-electron radical SOMOs, plus axial ligand sorting for heteroleptic species like $\mathrm{XeOF_4}$) to distinguish true 3D molecular point groups from flat 2D projections:
-  - $AX_2E_3$ ($\mathrm{XeF_2}$): Linear $3\text{c–}4\text{e}$ hypervalent ($D_{\infty h}$, $\mathrm{BO}=1.0$)
-  - $AX_6E_1$ ($\mathrm{XeF_6}$): Fluxional monocapped octahedron ($C_{3v}$) instead of $O_h$ or planar $D_{6h}$
-  - $AX_4E_2$ ($\mathrm{XeF_4}$): Square planar ($D_{4h}$)
-  - $AX_4E_1$ ($\mathrm{SF_4}$): Seesaw ($C_{2v}$)
-  - $AX_3E_2$ ($\mathrm{ClF_3}$): T-shaped ($C_{2v}$)
-  - $AX_5E_1$ ($\mathrm{BrF_5}$ / $\mathrm{IF_5}$ / $\mathrm{XeOF_4}$): Square pyramidal ($C_{4v}$)
-  - $AX_5E_0$ ($\mathrm{PF_5}$): Trigonal bipyramidal ($D_{3h}$)
-  - $AX_2E_{0.5}$ ($\mathrm{NO_2}$): Bent open-shell radical ($C_{2v}$, $134.3^\circ$)
-- **Interactive Character Tables**: Supports $C_s, C_{2v}, C_{3v}, C_{4v}, D_{2h}, D_{3h}, D_{4h}, D_{6h}, D_{\infty h}, C_{\infty v}, T_d, O_h$. Hovering or clicking any Mulliken irreducible representation ($A_1, B_1, E, T_2, \Pi, \Sigma^+$, etc.) highlights all matching MOs across the correlation diagram.
+### 2. Interactive 2D Chemical Structure Editor & 2D $\to$ 3D VSEPR Reconstructor
+- **Full Drawing Suite**: Select/Move, Atom Placement ($\mathrm{C, N, O, F, P, S, Cl, Br, I, H, B, Si, Xe, Fe, Pt}$ + Periodic Table modal), Single/Double/Triple covalent bonds, **Up Wedge (`W`)** and **Down Hashed Wedge (`D` / `4`)** stereochemical bonds, Eraser, and Ring Templates (Cyclopropane, Cyclobutane, Cyclopentane, Cyclohexane, Benzene).
+- **Stereocenter-Aware 3D VSEPR Builder**: Converts 2D skeletal drawings and wedge/dash stereocenters into 3D Cartesian coordinates ($\text{\AA}$) on the fly, automatically updating the Schoenflies point group, character table, and MO correlation diagram.
 
-### 3. Live PubChem Integration & NIST CCCBDB Audit Suite
-- **Unified PubChem Omnibar**: Resolve live 3D coordinates, IUPAC names, SMILES, and molecular metadata directly from the NCBI PubChem PUG-REST API, complete with 3D geometry provenance indicators (`PubChem MMFF94s 3D-SDF Conformer` vs. `2D-SDF → 3D VSEPR Reconstructed`).
-- **Experimental Database Audit**: Built-in verification suite comparing computed Extended Hückel / Koopmans' theorem orbital energies ($\mathrm{IP}_i \approx -\varepsilon_i$) against experimental **NIST CCCBDB** and **He(I) Photoelectron Spectroscopy (PES)** vertical ionization potentials across all 20 benchmark molecules, complete with Mean Absolute Error (MAE) and geometry accuracy metrics.
+### 3. Distance-Scaled Extended Hückel & Symmetry-Adapted LCAO-MO Engine
+- **Curated NIST PES Benchmarks**: Exact experimental/CCCBDB vertical ionization and orbital energy levels, Mulliken irreducible representations ($\Gamma_i$), and symmetry-adapted LCAO wavefunctions for **22 benchmark molecules** spanning linear, bent, trigonal, tetrahedral, hypervalent, octahedral, conjugated $\pi$-systems, and large biomolecules.
+- **Large Molecule & Conjugated Polyene Support**:
+  - **Frontier & Delocalized $\pi$-Subspace Prioritization**: Automatically retains all conjugated $p_\pi$ and heteroatom lone-pair orbitals alongside top-weighted $\sigma/\sigma^*$ framework orbitals so large systems like **$\beta$-Carotene ($\mathrm{C_{40}H_{56}}$, 96 atoms)** and **Adenosine Triphosphate ($\mathrm{C_{10}H_{16}N_5O_{13}P_3}$, 47 atoms)** preserve their physically meaningful HOMO–LUMO frontier gap and delocalized polyene/phosphate bands.
+  - **Occupied/Virtual Window Slicing**: Centers the interactive correlation diagram around the frontier HOMO–LUMO manifold (`10 occupied + 10 virtual` levels) so energy rungs remain clear and legible regardless of molecular size.
+- **Electronic State & Charge Controls**:
+  - Adjust molecular **Charge ($q \in [-2, +2]$)** to model radical cations, anions, and isoelectronic series.
+  - Toggle **Ground State vs. Excited State ($h\nu$, HOMO $\to$ LUMO promotion)** with automatic spin-multiplicity ($2S+1$), magnetic state (Diamagnetic vs. Paramagnetic), and **Bond Order** recalculation.
+  - Step cleanly through molecular orbitals using the header **`↑` / `↓` orbital stepping buttons** (or keyboard arrow keys) and toggle the **Full MO Level Table (`All Levels →`)** for complete eigenvalue and occupancy inspection.
 
-### 4. Chemical Edge-Case & Open-Shell Radical Handling
-- **Subvalent & Multiple-Bond Valences**: Accurately preserves unsaturated and dative bonding topologies in $\mathrm{CO}$ ($C\equiv O$), $\mathrm{NO}$, $\mathrm{NO_2}$, $\mathrm{O_3}$, and $\mathrm{SO_2}$ without erroneous implicit-hydrogen padding.
-- **Hund's Rule & Open-Shell Radicals / Diradicals**: Supports degenerate $\pi / e / t_2$ manifold half-filling, triplet diradicals ($\mathrm{O_2}$ ${}^3\Sigma_g^-$ with two parallel-spin $1\pi_g^*$ SOMOs), and odd-electron SOMO radicals ($\mathrm{NO}$ with a $2\pi^*$ SOMO and $\mathrm{BO}=2.5$).
-- **s–p Mixing Correction**: Captures $3\sigma_g^+ / 1\pi_u$ ($\mathrm{N_2}$) and $5\sigma / 1\pi$ ($\mathrm{CO}$) orbital ordering inversions in homonuclear and heteronuclear diatomics.
+### 4. Continuous 3D AO $\to$ MO Wavefunction Morphing & Symmetry Stage
+- **Real-Time Scalar-Field Wavefunction Morphing (`Morph MO` & `0%–100%` Slider)**:
+  - Play/Pause or scrub the interactive **`0%–100%` morph slider** in the 3D viewport header to watch **Separate Atomic Orbitals (`0%`)** continuously overlap, interfere, and fuse into the **Merged Molecular Orbital Isosurface (`100%`)**.
+  - Powered by a **6-tetrahedra Kuhn Marching Tetrahedra** isosurface extractor over a **watertight boundary-windowed 3D scalar field**:
+    $$F(\mathbf{r}, t) = (1 - t)\,F_{\text{AO}}(\mathbf{r}) + t\,F_{\text{MO}}(\mathbf{r})$$
+    where $F_{\text{AO}}(\mathbf{r}) = \operatorname{sign}(\psi_{\mu^*})\sqrt{\sum_\mu (c_\mu \phi_\mu(\mathbf{r}))^2}$ keeps individual constituent atomic orbitals spatially distinct at $t = 0$, and $F_{\text{MO}}(\mathbf{r}) = \sum_\mu c_\mu \phi_\mu(\mathbf{r})$ evaluates the true LCAO-MO interference sum at $t = 1$.
+  - **Constructive & Destructive Quantum Interference**: Bonding combinations with matching signs ($c_\mu c_\nu > 0$) lower their saddle barrier and topologically bridge across covalent bonds, whereas antibonding combinations ($c_\mu c_\nu < 0$) carve out zero-crossing nodal planes between nuclei.
+  - **Tangent-Plane Laplacian Surface Fairing & Analytical $\nabla F$ Normals**: Projects local Laplacian smoothing onto the isosurface tangent plane $(\mathbf{I} - \mathbf{n}\mathbf{n}^\top)\Delta\mathbf{p}$ and evaluates central-difference analytical gradients $\nabla F(\mathbf{r})$ for smooth Phong shading and 100% closed, unclipped 2-manifold lobes across all scale settings (`0.5×–1.6×`).
+- **3D Options & Symmetry Overlays**:
+  - Toggle **Nodal Planes**, **Symmetry Axes ($C_n, \sigma_v, \sigma_h, \sigma_d$)**, **Continuous $C_n$ Rotation (`Spin Cn`)**, **Reset Camera**, **Lobe Opacity (`15%–95%`)**, and **Lobe Scale (`0.5×–1.6×`)**.
+  - Press **`H`** (or click **Show/Hide 3D Controls**) to toggle the floating bottom 3D HUD pill.
 
----
-
-## Curated Benchmark Molecules (20 NIST PES Standards)
-
-| Molecule | Formula | Point Group | VSEPR / Topology | Frontier Highlight |
-| :--- | :--- | :--- | :--- | :--- |
-| **Water** | $\mathrm{H_2O}$ | $C_{2v}$ | $AX_2E_2$ (Bent) | Non-bonding oxygen $1b_1$ ($2p_x$) lone pair HOMO |
-| **Ammonia** | $\mathrm{NH_3}$ | $C_{3v}$ | $AX_3E_1$ (Trigonal Pyramidal) | $3a_1$ pyramidal lone pair & degenerate $1e$ ($\mathrm{N\text{--}H}$) bonding |
-| **Methane** | $\mathrm{CH_4}$ | $T_d$ | $AX_4E_0$ (Tetrahedral) | Triply degenerate $1t_2$ HOMO — PES proof against naive $sp^3$ equivalence |
-| **Benzene** | $\mathrm{C_6H_6}$ | $D_{6h}$ | Planar $\pi$-Ring | Frost circle $\pi$-manifold ($1a_{2u}, 1e_{1g}, 1e_{2u}, 1b_{2g}$) |
-| **Ethylene** | $\mathrm{C_2H_4}$ | $D_{2h}$ | Planar $\pi$-Alkene | Classic $\pi(1b_{3u}) \to \pi^*(1b_{2g})$ frontier transition |
-| **Formaldehyde** | $\mathrm{CH_2O}$ | $C_{2v}$ | Planar Carbonyl | Oxygen $2b_2$ ($n_O$) HOMO and $2b_1$ ($\pi^*_{\mathrm{CO}}$) LUMO |
-| **Carbon Dioxide** | $\mathrm{CO_2}$ | $D_{\infty h}$ | $AX_2E_0$ (Linear) | Doubly degenerate $1\pi_g(x,y)$ non-bonding terminal oxygen HOMO |
-| **Carbon Monoxide** | $\mathrm{CO}$ | $C_{\infty v}$ | Heteronuclear Diatomic | Carbon-centered $5\sigma$ HOMO via $s\text{--}p$ mixing |
-| **Nitric Oxide** | $\mathrm{NO}$ | $C_{\infty v}$ | Open-Shell Radical | $11e^-$ radical with singly occupied $2\pi^*$ SOMO ($\mathrm{BO}=2.5$) |
-| **Dioxygen** | $\mathrm{O_2}$ | $D_{\infty h}$ | Triplet Diradical (${}^3\Sigma_g^-$) | Half-filled degenerate $1\pi_g^*(x,y)$ SOMO pair ($\uparrow\uparrow$, $\mathrm{BO}=2.0$) |
-| **Dinitrogen** | $\mathrm{N_2}$ | $D_{\infty h}$ | Homonuclear Triple Bond | $2s\text{--}2p$ mixing places $3\sigma_g^+$ HOMO above $1\pi_u(x,y)$ ($\mathrm{BO}=3.0$) |
-| **Boron Trifluoride** | $\mathrm{BF_3}$ | $D_{3h}$ | $AX_3E_0$ (Trigonal Planar) | Tangential fluorine $1a_2'$ HOMO & vacant boron $2a_2''$ ($2p_z$) LUMO |
-| **Sulfur Hexafluoride** | $\mathrm{SF_6}$ | $O_h$ | $AX_6E_0$ (Octahedral) | Degenerate $1e_g(a,b)$ hypervalent HOMO & $2a_{1g}^*$ antibonding LUMO |
-| **Xenon Hexafluoride** | $\mathrm{XeF_6}$ | $C_{3v}$ | $AX_6E_1$ (Monocapped Octahedral) | Stereochemically active $5s\text{--}5p$ lone pair in $3a_1$ HOMO & $2e^*$ LUMO |
-| **Xenon Tetrafluoride** | $\mathrm{XeF_4}$ | $D_{4h}$ | $AX_4E_2$ (Square Planar) | Axial $5p_z$ lone-pair $2a_{2u}$ HOMO & $2e_u^*(x,y)$ 3c–4e LUMO |
-| **Xenon Difluoride** | $\mathrm{XeF_2}$ | $D_{\infty h}$ | $AX_2E_3$ (Linear 3c–4e) | Equatorial $5\pi_u(x,y)$ lone-pair HOMO & axial $7\sigma_u^{+*}$ 3c–4e LUMO |
-| **Xenon Oxytetrafluoride** | $\mathrm{XeOF_4}$ | $C_{4v}$ | $AX_4YE_1$ (Square Pyramidal) | Trans axial lone-pair $4a_1$ HOMO, axial $3e(\pi_{\mathrm{XeO}})$, & $1b_1$ basal $n_{\mathrm{F}}$ SALC |
-| **Sulfur Tetrafluoride** | $\mathrm{SF_4}$ | $C_{2v}$ | $AX_4E_1$ (Seesaw) | Equatorial $3a_1$ lone-pair HOMO & axial $2b_1^*$ 3c–4e LUMO |
-| **Chlorine Trifluoride** | $\mathrm{ClF_3}$ | $C_{2v}$ | $AX_3E_2$ (T-Shaped) | Equatorial lone pair $3a_1$ HOMO & hypervalent axial $2b_2^*$ LUMO |
-| **Phosphorus Pentafluoride** | $\mathrm{PF_5}$ | $D_{3h}$ | $AX_5E_0$ (Trigonal Bipyramidal) | Non-bonding fluorine $2a_1'$ HOMO & axial $2a_2''^*$ antibonding LUMO |
+### 5. Group Theory Character Tables, $\Gamma_{\text{red}}$ Decomposition & NIST Audit
+- **Point Group & Character Table Inspector**: Full Schoenflies character tables ($C_1, C_s, C_i, C_2, C_{2v}, C_{3v}, C_{4v}, C_{2h}, D_2, D_{2h}, D_{3h}, D_{4h}, D_{6h}, D_{2d}, D_{3d}, C_{\infty v}, D_{\infty h}, T_d, O_h$) with conjugacy classes, Mulliken symbols, linear/rotational ($x, y, z, R_x, R_y, R_z$) and quadratic ($x^2, z^2, xy, xz, yz$) basis functions, and dynamically highlighted active MO irreps.
+- **Interactive Reducible Representation ($\Gamma_{\text{red}}$) Decomposition Calculator**:
+  - Decompose any reducible representation into its direct sum of irreducible representations ($\Gamma_{\text{red}} = \bigoplus_i a_i \Gamma_i$) using the **Great Orthogonality Theorem**:
+    $$a_i = \frac{1}{h} \sum_R N_R \, \chi_{\text{red}}(R) \, \chi_i^*(R)$$
+  - Select from built-in molecular basis presets ($\Gamma_\sigma$, $\Gamma_{\text{val}}$, $\Gamma_{3N}$, $\Gamma_{\text{trans+rot}}$, $\Gamma_{\text{vib}}$, $\Gamma_\pi$) or enter custom characters $\chi(R)$ per conjugacy class with automatic lower-case Mulliken direct-sum formatting and step-by-step inner-product work.
+- **NIST CCCBDB & PES Audit Tab**: Compares computed geometry parameters ($r_e, \theta_e$), first vertical ionization potentials ($\text{IE}_1 = -\varepsilon_{\text{HOMO}}$), and Koopmans' theorem orbital energies against experimental Photoelectron Spectroscopy (PES) literature references (Turner, Kimura, Potts, Siegbahn, Bieri).
 
 ---
 
-## Quick Start
+## Curated Benchmark Molecules (22 NIST PES, CCCBDB & Biomolecular Standards)
 
-### Prerequisites
-- **Node.js** `>= 18.x`
-- **npm** `>= 9.x`
-
-### Installation & Local Development
-
-```bash
-# Install dependencies
-npm install
-
-# Start the development server on http://localhost:3000
-npm run dev
-```
-
-### Running the Quantum Chemistry & Edge-Case Test Suite
-
-SymmOrbital includes an automated test suite verifying point-group classification, VSEPR 3D coordinate reconstruction, implicit-hydrogen valence rules, open-shell Hund's rule occupancy, and experimental HOMO/SOMO symmetries across all 20 benchmark molecules:
-
-```bash
-npx tsx --test src/chemistry/moEngine.test.ts
-```
-
-### Production Build & GitHub Pages Deployment
-
-```bash
-npm run build
-```
-
-This repository includes an automated GitHub Actions workflow (`.github/workflows/deploy-pages.yml`) and relative asset base configuration (`vite.config.ts`) for zero-config **GitHub Pages** hosting. Push to `main` and set **Settings → Pages → Source** to **GitHub Actions**.
+| Category | Molecule | Formula | Point Group | Highlighted Electronic & Symmetry Features |
+| :--- | :--- | :--- | :---: | :--- |
+| **Linear** | Dihydrogen | $\mathrm{H_2}$ | $D_{\infty h}$ | Canonical 2-center $1\sigma_g / 1\sigma_u^*$ covalent bond |
+| **Linear** | Dinitrogen | $\mathrm{N_2}$ | $D_{\infty h}$ | $s\text{-}p$ mixing inversion ($3\sigma_g$ HOMO above $1\pi_u$) |
+| **Linear** | Dioxygen | $\mathrm{O_2}$ | $D_{\infty h}$ | Paramagnetic triplet diradical ($^3\Sigma_g^-$, half-filled $1\pi_g^*$) |
+| **Linear** | Carbon Monoxide | $\mathrm{CO}$ | $C_{\infty v}$ | Heteronuclear polarization; carbon-centered $5\sigma$ HOMO lone pair |
+| **Linear** | Carbon Dioxide | $\mathrm{CO_2}$ | $D_{\infty h}$ | 3-center 4-electron $\pi$-system ($1\pi_u, 1\pi_g$ non-bonding HOMO) |
+| **Linear** | Acetylene | $\mathrm{C_2H_2}$ | $D_{\infty h}$ | Degenerate cylindrical $1\pi_u$ triple-bond manifold |
+| **Bent / Planar** | Water | $\mathrm{H_2O}$ | $C_{2v}$ | Non-equivalent oxygen lone pairs ($1b_1$ pure $p_x$ vs. $3a_1$ $sp^2$-hybrid) |
+| **Bent / Planar** | Formaldehyde | $\mathrm{H_2CO}$ | $C_{2v}$ | Classic $n \to \pi^*$ ($2b_2 \to 2b_1$) carbonyl chromophore |
+| **Bent / Planar** | Diborane | $\mathrm{B_2H_6}$ | $D_{2h}$ | Electron-deficient 3-center 2-electron ($b_{2u}, a_g$) bridging $\mathrm{B\text{--}H\text{--}B}$ bonds |
+| **Pyramidal / Planar** | Ammonia | $\mathrm{NH_3}$ | $C_{3v}$ | $3a_1$ pyramidal lone pair and degenerate $1e$ $\mathrm{N\text{--}H}$ bonding pair |
+| **Pyramidal / Planar** | Boron Trifluoride | $\mathrm{BF_3}$ | $D_{3h}$ | Lewis acidity and $1a_2''$ out-of-plane $\pi$-backbonding |
+| **3D Polyhedral** | Methane | $\mathrm{CH_4}$ | $T_d$ | Triply degenerate $1t_2$ photoemission bands ($1a_1 + 1t_2$, no $d$-orbital involvement) |
+| **3D Polyhedral** | White Phosphorus | $\mathrm{P_4}$ | $T_d$ | Strained tetrahedral cage with bent "banana" $\sigma$-cluster orbitals ($2a_1, 2t_2, 1e$) |
+| **3D Polyhedral** | Sulfur Hexafluoride | $\mathrm{SF_6}$ | $O_h$ | Hypervalent 12-electron octahedral bonding ($1e_g$ non-bonding ligand SALCs) |
+| **Hypervalent** | Xenon Difluoride | $\mathrm{XeF_2}$ | $D_{\infty h}$ | Classic Pimentel-Rundle 3-center 4-electron ($3\sigma_u$ non-bonding) linear hypervalency |
+| **Hypervalent** | Phosphorus Pentafluoride | $\mathrm{PF_5}$ | $D_{3h}$ | Trigonal bipyramidal axial vs. equatorial bonding and Berry pseudorotation |
+| **Hypervalent** | Xenon Oxytetrafluoride | $\mathrm{XeOF_4}$ | $C_{4v}$ | Square pyramidal $d^2sp^3$ / 3c-4e basal $\mathrm{XeF_4}$ vs. axial $\mathrm{Xe{=}O}$ $\pi$-bond |
+| **Conjugated $\pi$** | Ethylene | $\mathrm{C_2H_4}$ | $D_{2h}$ | Full 12-valence-MO $D_{2h}$ manifold and frontier $1b_{3u}(\pi) \to 1b_{2g}(\pi^*)$ gap |
+| **Conjugated $\pi$** | 1,3-Butadiene | $\mathrm{C_4H_6}$ | $C_{2h}$ | 4-center conjugated $\pi$-manifold ($1a_u, 1b_g, 2a_u^*, 2b_g^*$) |
+| **Conjugated $\pi$** | Benzene | $\mathrm{C_6H_6}$ | $D_{6h}$ | Hückel $6\pi$ aromaticity ($1a_{2u}$, degenerate $1e_{1g}$ HOMO & $1e_{2u}$ LUMO) |
+| **Large Molecules** | $\beta$-Carotene | $\mathrm{C_{40}H_{56}}$ | $D_{2h}$ | 96-atom conjugated 11-double-bond polyene ($22\pi$ electron bathochromic $\pi \to \pi^*$ chromophore) |
+| **Large Molecules** | Adenosine Triphosphate | $\mathrm{C_{10}H_{16}N_5O_{13}P_3}$ | $C_s$ | 47-atom bioenergetic coenzyme with adenine $\pi$-ring HOMO and triphosphate anhydride LUMO |
 
 ---
 
-## Architecture & Directory Structure
+## Tech Stack & Verification
 
-```text
-src/
-├── chemistry/
-│   ├── moEngine.ts            # Extended Hückel LCAO-MO solver, 3D VSEPR reconstructor & point-group classifier
-│   ├── moEngine.test.ts       # Unit tests for valences, VSEPR special cases, radicals & Hund's rule
-│   ├── moleculesData.ts       # 20 canonical benchmark molecules with calibrated AO/MO/SALC sets
-│   ├── symmetryData.ts        # Schoenflies point groups (including C4v/D4h/Oh), symmetry elements & character tables
-│   ├── databaseBenchmarks.ts  # Experimental NIST CCCBDB & He(I) PES vertical ionization potentials
-│   ├── pubchemService.ts      # Live NCBI PubChem PUG-REST 3D/2D structure & property resolver
-│   └── latexUtils.ts          # Chemical formula, Schoenflies, Mulliken irrep & LCAO LaTeX formatter
-├── components/
-│   ├── ChemicalSketcher2D.tsx # Interactive 2D vector sketcher with single/double/triple/wedge/dash & ring tools
-│   ├── OrbitalVisualizer3D.tsx# Three.js WebGL 3D molecular & wavefunction phase isosurface stage
-│   ├── MODiagramPanel.tsx     # Interactive SVG AO-MO-SALC correlation ladder & level table
-│   ├── SymmetryGroupPanel.tsx # Interactive Mulliken character table & symmetry operation trigger
-│   ├── DatabaseVerificationPanel.tsx # NIST CCCBDB vs. Extended Hückel Koopmans' audit table
-│   └── Latex.tsx              # Fast, accessible KaTeX math & chemical renderer
-├── backup_v1/
-│   └── AppClassicV1.tsx       # Reversible V1 Classic stacked layout snapshot
-└── App.tsx                    # V2 Pro 3-Pane Synchronized Workbench with Light/Dark theme support
-```
-
----
-
-## License
-
-Licensed under the **Apache License 2.0**.
+- **Frontend**: React 19, TypeScript, Tailwind CSS 4, Lucide Icons, KaTeX mathematical typesetting
+- **3D Rendering**: Three.js (`WebGLRenderer`, custom Marching Tetrahedra scalar-field isosurface generator, tangent-plane Laplacian surface fairing, analytical $\nabla F$ vertex normals)
+- **Chemical Data**: Live PubChem PUG REST API + Curated NIST CCCBDB / PES Benchmark Library
+- **Automated Test Suite**: Run `npx tsx --test src/chemistry/moEngine.test.ts` to verify all 22 benchmark eigenvalues, Mulliken symmetries, watertight 3D Marching Tetrahedra isosurfaces (`0` open boundary edges), and PubChem fallback calculations.

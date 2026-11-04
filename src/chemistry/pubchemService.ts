@@ -58,11 +58,83 @@ export interface PubChemCompoundProfile {
 
 const SUPPORTED_ELEMENTS = new Set<string>(Object.keys(ELEMENT_PROPERTIES));
 
+const ELEMENT_CONGENER_MAP: Record<string, ElementSymbol> = {
+  Br: 'Cl',
+  I: 'Cl',
+  At: 'Cl',
+  Se: 'S',
+  Te: 'S',
+  As: 'P',
+  Sb: 'P',
+  Si: 'C',
+  Ge: 'C',
+  Li: 'B',
+  Na: 'B',
+  K: 'B',
+  Be: 'B',
+  Mg: 'B',
+  Al: 'B',
+  Ga: 'B',
+  Kr: 'Xe',
+  Rn: 'Xe',
+};
+
+const AMBIGUOUS_FORMULA_QUERY_MAP: Record<string, string> = {
+  hf: 'hydrogen fluoride',
+  hcl: 'hydrogen chloride',
+  hbr: 'hydrogen bromide',
+  hi: 'hydrogen iodide',
+  co: 'carbon monoxide',
+  no: 'nitric oxide',
+  cs: 'carbon monosulfide',
+  cn: 'cyanide',
+  hs: 'sulfanyl',
+  sh: 'sulfanyl',
+  ho: 'hydroxyl',
+  oh: 'hydroxyl',
+  bh: 'borane',
+  bh3: 'borane',
+  lih: 'lithium hydride',
+  nah: 'sodium hydride',
+  f2: 'molecular fluorine',
+  cl2: 'molecular chlorine',
+  br2: 'molecular bromine',
+  i2: 'molecular iodine',
+  h2s: 'hydrogen sulfide',
+  ph3: 'phosphine',
+  sih4: 'silane',
+  hcn: 'hydrogen cyanide',
+  so2: 'sulfur dioxide',
+  so3: 'sulfur trioxide',
+  o3: 'ozone',
+  no2: 'nitrogen dioxide',
+  n2o: 'nitrous oxide',
+  cs2: 'carbon disulfide',
+  ocs: 'carbonyl sulfide',
+  pcl3: 'phosphorus trichloride',
+  pcl5: 'phosphorus pentachloride',
+  nf3: 'nitrogen trifluoride',
+  cf4: 'carbon tetrafluoride',
+  ccl4: 'carbon tetrachloride',
+  bf3: 'boron trifluoride',
+  bcl3: 'boron trichloride',
+  sf4: 'sulfur tetrafluoride',
+  clf3: 'chlorine trifluoride',
+  brf5: 'bromine pentafluoride',
+  xef2: 'xenon difluoride',
+  xef4: 'xenon tetrafluoride',
+  xef6: 'xenon hexafluoride',
+  xeof4: 'xenon oxytetrafluoride',
+};
+
 /**
  * Parses a PubChem V2000 SDF block into AtomNode[] and BondEdge[]
  * for our 2D Sketcher and 3D MO Engine.
  */
-export function parseSdfToGraph(sdfText: string): {
+export function parseSdfToGraph(
+  sdfText: string,
+  molecularFormula = ''
+): {
   atoms: AtomNode[];
   bonds: BondEdge[];
   meanBondLengthAngstrom?: number;
@@ -89,7 +161,7 @@ export function parseSdfToGraph(sdfText: string): {
     const rawSym = line.slice(31, 34).trim();
     const element: ElementSymbol = SUPPORTED_ELEMENTS.has(rawSym)
       ? (rawSym as ElementSymbol)
-      : 'C';
+      : ELEMENT_CONGENER_MAP[rawSym] || 'C';
 
     elemCounts[element] = (elemCounts[element] || 0) + 1;
     rawAtoms.push({
@@ -131,6 +203,40 @@ export function parseSdfToGraph(sdfText: string): {
         bondLengthSum += d;
         bondLengthCount++;
       }
+    }
+  }
+
+  // If PubChem 2D-SDF returned a disconnected pair (e.g. ionic LiH) or single heavy atom with implicit H in formula (e.g. FH, ClH)
+  if (rawAtoms.length === 2 && rawBonds.length === 0) {
+    rawBonds.push({
+      id: 'sdf_b_1',
+      source: rawAtoms[0].id,
+      target: rawAtoms[1].id,
+      order: 1,
+    });
+  } else if (rawAtoms.length === 1 && rawAtoms[0].element !== 'H' && molecularFormula.includes('H')) {
+    const hMatch = molecularFormula.match(/H(\d*)/);
+    const hCount = hMatch ? (hMatch[1] ? parseInt(hMatch[1], 10) : 1) : 0;
+    const center = rawAtoms[0];
+    const r = (ELEMENT_PROPERTIES[center.element]?.covalentRadius ?? 0.75) + 0.32;
+    for (let k = 0; k < Math.min(6, hCount); k++) {
+      const angle = (k * 2 * Math.PI) / Math.max(1, hCount);
+      const hId = `H${k + 1}`;
+      rawAtoms.push({
+        id: hId,
+        element: 'H',
+        x2d: Number((center.x2d + r * Math.cos(angle)).toFixed(2)),
+        y2d: Number((center.y2d + r * Math.sin(angle)).toFixed(2)),
+        x3d: Number((center.x3d + r * Math.cos(angle)).toFixed(2)),
+        y3d: Number((center.y3d + r * Math.sin(angle)).toFixed(2)),
+        z3d: 0,
+      });
+      rawBonds.push({
+        id: `sdf_b_h_${k + 1}`,
+        source: center.id,
+        target: hId,
+        order: 1,
+      });
     }
   }
 
@@ -199,10 +305,13 @@ function extractPugViewStrings(node: any, out: string[], maxCount = 4): void {
  * and returns molecular properties, 2D/3D atomic coordinates, and experimental annotations.
  */
 export async function lookupPubChemCompound(query: string): Promise<PubChemCompoundProfile> {
-  const clean = query.trim();
-  if (!clean) {
+  const rawClean = query.trim();
+  if (!rawClean) {
     throw new Error('Please enter a chemical name, formula, SMILES, or PubChem CID.');
   }
+
+  // Disambiguate short chemical formulas (e.g. "HF" -> "hydrogen fluoride" instead of Hafnium "Hf")
+  const clean = AMBIGUOUS_FORMULA_QUERY_MAP[rawClean.toLowerCase()] || rawClean;
 
   const isNumericCid = /^\d+$/.test(clean);
   const namespace = isNumericCid ? 'cid' : 'name';
@@ -225,7 +334,7 @@ export async function lookupPubChemCompound(query: string): Promise<PubChemCompo
   const propData = await propRes.json();
   const prop = propData?.PropertyTable?.Properties?.[0];
   if (!prop || !prop.CID) {
-    throw new Error(`No PubChem record found for "${clean}".`);
+    throw new Error(`No PubChem record found for "${rawClean}".`);
   }
 
   const cid = Number(prop.CID);
@@ -271,7 +380,7 @@ export async function lookupPubChemCompound(query: string): Promise<PubChemCompo
   }
 
   const parsedSdf = sdfText
-    ? parseSdfToGraph(sdfText)
+    ? parseSdfToGraph(sdfText, prop.MolecularFormula || '')
     : { atoms: [], bonds: [], meanBondLengthAngstrom: undefined };
 
   return {

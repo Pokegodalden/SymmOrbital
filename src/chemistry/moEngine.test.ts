@@ -457,3 +457,47 @@ test('Scalar-field Marching Cubes AO-to-MO morphing separates AOs at t=0 and fus
   );
 });
 
+test('HF and HCl (including tilted 3D PubChem SDF geometries) produce literature-standard Mulliken labels (2σ+, 3σ+, 1π, 4σ+*) and accurate 3D bonding/antibonding topologies', () => {
+  const hf = analyzeMolecularGraph(
+    [
+      { id: 'F1', element: 'F', x2d: -0.5, y2d: 0, x3d: 0, y3d: 0, z3d: 0 },
+      { id: 'H1', element: 'H', x2d: 0.5, y2d: 0, x3d: 0.4358, y3d: -0.1477, z3d: -0.8188 },
+    ],
+    [{ id: 'b1', source: 'F1', target: 'H1', order: 1 }],
+    { customName: 'Hydrogen Fluoride', iupacName: 'fluorane', smiles: 'F' }
+  );
+
+  const hcl = analyzeMolecularGraph(
+    [
+      { id: 'Cl1', element: 'Cl', x2d: -0.5, y2d: 0, x3d: 0, y3d: 0, z3d: 0 },
+      { id: 'H1', element: 'H', x2d: 0.5, y2d: 0, x3d: 0.6085, y3d: -0.2063, z3d: -1.1433 },
+    ],
+    [{ id: 'b1', source: 'Cl1', target: 'H1', order: 1 }],
+    { customName: 'Hydrogen Chloride', iupacName: 'chlorane', smiles: 'Cl' }
+  );
+
+  for (const mol of [hf, hcl]) {
+    assert.equal(mol.pointGroupId, 'Cinfv');
+    // Verify canonical x-axis alignment (y3d = 0, z3d = 0)
+    for (const a of mol.atoms) {
+      assert.ok(Math.abs(a.y3d) < 1e-6 && Math.abs(a.z3d) < 1e-6);
+    }
+
+    const labels = mol.molecularOrbitals.map((m) => m.label);
+    assert.deepEqual(labels, ['2σ+', '3σ+', '1π(x)', '1π(y)', '4σ+*']);
+
+    const mo3Sigma = mol.molecularOrbitals[1];
+    const mo4SigmaStar = mol.molecularOrbitals[4];
+    assert.equal(mo3Sigma.bondingType, 'bonding');
+    assert.equal(mo4SigmaStar.bondingType, 'antibonding');
+    assert.ok(mo4SigmaStar.isLUMO);
+
+    // Verify 4σ+* has both positive and negative 3D phase lobes separated by an internuclear nodal plane
+    const mesh4s = buildMorphIsosurfaceKeyframe(mo4SigmaStar, mol.atoms, 1.0, 1.0);
+    assert.ok(
+      mesh4s.positive.positions.length > 300 && mesh4s.negative.positions.length > 300,
+      `Expected both positive and negative lobes in ${mol.formula} 4σ+*, got +${mesh4s.positive.positions.length / 3} / -${mesh4s.negative.positions.length / 3}`
+    );
+  }
+});
+
