@@ -55,13 +55,29 @@ export function getImplicitHydrogenCountForAtom(
     }
   }
 
-  // Terminal carbon triple-bonded to Oxygen or Nitrogen (C≡O or R-N≡C isocyanide) has 0 implicit H
-  if (connected.length === 1 && connected[0].order === 3) {
+  // Terminal carbon triple- or double-bonded to Oxygen, Nitrogen, or Sulfur (C≡O, [C]=O, C≡N-, R-N≡C) has 0 implicit H
+  if (connected.length === 1 && connected[0].order >= 2) {
     const otherId = connected[0].source === atom.id ? connected[0].target : connected[0].source;
     const other = atoms.find((x) => x.id === otherId);
     if (other && (other.element === 'O' || other.element === 'N' || other.element === 'S')) {
       return 0;
     }
+  }
+
+  // Coordinated cyanide / carbonyl / thiocarbonyl carbon (M-C≡N, M-C≡O, M-C=O) has 0 implicit H
+  const hasMultipleBondToHetero = connected.some((b) => {
+    if (b.order < 2) return false;
+    const otherId = b.source === atom.id ? b.target : b.source;
+    const other = atoms.find((x) => x.id === otherId);
+    return Boolean(other && (other.element === 'O' || other.element === 'N' || other.element === 'S'));
+  });
+  const isBondedToMetal = connected.some((b) => {
+    const otherId = b.source === atom.id ? b.target : b.source;
+    const other = atoms.find((x) => x.id === otherId);
+    return Boolean(other && (isTransitionMetal(other.element) || isLanthanide(other.element)));
+  });
+  if ((hasMultipleBondToHetero && isBondedToMetal) || (atom.formalCharge && hasMultipleBondToHetero)) {
+    return 0;
   }
 
   const bondOrderSum = connected.reduce((sum, b) => sum + b.order, 0);
@@ -92,6 +108,317 @@ const SQUARE_PLANAR_METALS = new Set<ElementSymbol>(['Pt', 'Pd', 'Ni', 'Au', 'Rh
 
 export function isSquarePlanarMetal(el: ElementSymbol): boolean {
   return SQUARE_PLANAR_METALS.has(el);
+}
+
+const SPECTATOR_COUNTERIONS = new Set<ElementSymbol>([
+  'Li', 'Na', 'K', 'Rb', 'Cs', 'Mg', 'Ca', 'Sr', 'Ba',
+]);
+
+const MAIN_GROUP_COORD_CENTERS = new Set<ElementSymbol>([
+  'B', 'Al', 'Ga', 'In', 'Tl', 'Si', 'Ge', 'Sn', 'Pb', 'P', 'As', 'Sb', 'Bi', 'S', 'Se', 'Te', 'Xe',
+]);
+
+/**
+ * Resolves missing coordinate covalent (dative M–L) bonds in coordination complexes
+ * where PubChem V2000 SDFs or disconnected SMILES encode ligands (`[C-]#N`, `[C-]#[O+]`,
+ * `[C]=O`, `NH3`, `Cl-`, etc.) as separate unconnected fragments around a central metal
+ * or hypervalent coordination center, and strips isolated spectator alkali/alkaline-earth counterions.
+ */
+export function resolveCoordinationBonds(
+  rawAtoms: AtomNode[],
+  rawBonds: BondEdge[],
+  stripSpectatorCounterions = true
+): { atoms: AtomNode[]; bonds: BondEdge[] } {
+  if (rawAtoms.length <= 1) {
+    return { atoms: rawAtoms, bonds: rawBonds };
+  }
+
+  const getComponents = (atomList: AtomNode[], bondList: BondEdge[]): AtomNode[][] => {
+    const adj = new Map<string, string[]>();
+    for (const a of atomList) adj.set(a.id, []);
+    for (const b of bondList) {
+      if (adj.has(b.source) && adj.has(b.target)) {
+        adj.get(b.source)!.push(b.target);
+        adj.get(b.target)!.push(b.source);
+      }
+    }
+    const visited = new Set<string>();
+    const comps: AtomNode[][] = [];
+    for (const a of atomList) {
+      if (visited.has(a.id)) continue;
+      const comp: AtomNode[] = [];
+      const queue = [a];
+      visited.add(a.id);
+      while (queue.length > 0) {
+        const cur = queue.shift()!;
+        comp.push(cur);
+        for (const nbId of adj.get(cur.id) || []) {
+          if (!visited.has(nbId)) {
+            visited.add(nbId);
+            const nbAtom = atomList.find((x) => x.id === nbId);
+            if (nbAtom) queue.push(nbAtom);
+          }
+        }
+      }
+      comps.push(comp);
+    }
+    return comps;
+  };
+
+  let atoms = rawAtoms.map((a) => ({ ...a }));
+  let bonds = rawBonds.map((b) => ({ ...b }));
+  let comps = getComponents(atoms, bonds);
+
+  if (comps.length <= 1) {
+    return { atoms, bonds };
+  }
+
+  // Strip isolated group-1 / group-2 spectator counterions (e.g. 4 K+ in K4[Fe(CN)6] or 2 Na+ in Na2[Fe(CN)5NO])
+  if (stripSpectatorCounterions && atoms.length > 2) {
+    const hasNonSpectatorCore = atoms.some(
+      (a) => !SPECTATOR_COUNTERIONS.has(a.element) && a.element !== 'H'
+    );
+    if (hasNonSpectatorCore) {
+      const spectatorIds = new Set(
+        comps
+          .filter((c) => c.length === 1 && SPECTATOR_COUNTERIONS.has(c[0].element))
+          .map((c) => c[0].id)
+      );
+      if (spectatorIds.size > 0 && spectatorIds.size < atoms.length) {
+        atoms = atoms.filter((a) => !spectatorIds.has(a.id));
+        bonds = bonds.filter((b) => !spectatorIds.has(b.source) && !spectatorIds.has(b.target));
+        comps = getComponents(atoms, bonds);
+        if (comps.length <= 1) {
+          return { atoms, bonds };
+        }
+      }
+    }
+  }
+
+  // Find central coordination atom among disconnected components
+  const tmOrLnSingle = comps.find(
+    (c) => c.length === 1 && (isTransitionMetal(c[0].element) || isLanthanide(c[0].element))
+  )?.[0];
+  const tmOrLnAny = atoms.find(
+    (a) => isTransitionMetal(a.element) || isLanthanide(a.element)
+  );
+  const mainGroupSingle =
+    comps.length >= 3
+      ? comps.find((c) => c.length === 1 && MAIN_GROUP_COORD_CENTERS.has(c[0].element))?.[0]
+      : undefined;
+
+  const centerAtom = tmOrLnSingle || tmOrLnAny || mainGroupSingle;
+
+  if (!centerAtom) {
+    if (atoms.length === 2 && bonds.length === 0) {
+      return {
+        atoms,
+        bonds: [
+          {
+            id: 'b_coord_1',
+            source: atoms[0].id,
+            target: atoms[1].id,
+            order: 1,
+          },
+        ],
+      };
+    }
+    return { atoms, bonds };
+  }
+
+  const distToCenter = (a: AtomNode) => {
+    const d3 = Math.hypot(
+      a.x3d - centerAtom.x3d,
+      a.y3d - centerAtom.y3d,
+      a.z3d - centerAtom.z3d
+    );
+    if (d3 > 0.01) return d3;
+    return Math.hypot(a.x2d - centerAtom.x2d, a.y2d - centerAtom.y2d);
+  };
+
+  for (const comp of comps) {
+    if (comp.some((a) => a.id === centerAtom.id)) continue;
+    if (comp.length > 8) continue;
+
+    let donor: AtomNode = comp[0];
+    if (comp.length === 1) {
+      donor = comp[0];
+    } else if (comp.length === 2) {
+      const [a, b] = comp;
+      if (a.element === 'H' && b.element !== 'H') {
+        donor = b;
+      } else if (b.element === 'H' && a.element !== 'H') {
+        donor = a;
+      } else if (
+        (a.element === 'C' && (b.element === 'N' || b.element === 'O' || b.element === 'S')) ||
+        (b.element === 'C' && (a.element === 'N' || a.element === 'O' || a.element === 'S'))
+      ) {
+        // Cyanide (-C≡N), Carbonyl (-C≡O / -C=O), Thiocarbonyl (-C≡S): Carbon is always the σ-donor
+        const cAtom = a.element === 'C' ? a : b;
+        const heteroAtom = a.element === 'C' ? b : a;
+        donor = cAtom;
+
+        // Upgrade divalent carbonyl [C]=O in PubChem SDFs (e.g. Fe(CO)5) to standard C≡O triple bond
+        if (heteroAtom.element === 'O') {
+          bonds = bonds.map((edge) =>
+            (edge.source === cAtom.id && edge.target === heteroAtom.id) ||
+            (edge.source === heteroAtom.id && edge.target === cAtom.id)
+              ? { ...edge, order: 3 as const }
+              : edge
+          );
+        }
+      } else if (
+        (a.element === 'N' && b.element === 'O') ||
+        (b.element === 'N' && a.element === 'O')
+      ) {
+        donor = a.element === 'N' ? a : b;
+      } else {
+        donor = distToCenter(a) <= distToCenter(b) ? a : b;
+      }
+    } else {
+      const nonH = comp.filter((a) => a.element !== 'H');
+      const pool = nonH.length > 0 ? nonH : comp;
+      donor = [...pool].sort((a, b) => distToCenter(a) - distToCenter(b))[0];
+    }
+
+    bonds.push({
+      id: `b_coord_${bonds.length + 1}`,
+      source: centerAtom.id,
+      target: donor.id,
+      order: 1,
+    });
+  }
+
+  return { atoms, bonds };
+}
+
+export interface LigandBranchInfo {
+  donor: AtomNode;
+  distalAtoms: AtomNode[];
+  sig: string;
+}
+
+export interface StarCoordinationTopology {
+  centerAtom: AtomNode;
+  branches: LigandBranchInfo[];
+  isMonoatomicLigands: boolean;
+}
+
+/**
+ * Detects whether a molecular graph has a single central coordination / VSEPR atom
+ * surrounded by nLig ∈ [2, 6] mutually disjoint terminal ligand branches (supporting both
+ * monoatomic ligands like -Cl, -F, -H and polyatomic ligands like -C≡N, -C≡O, -NO, -NH3, -OH2).
+ */
+export function analyzeStarCoordinationTopology(
+  atoms: AtomNode[],
+  bonds: BondEdge[]
+): StarCoordinationTopology | null {
+  if (atoms.length < 3 || atoms.length > 32) return null;
+
+  const adj = new Map<string, string[]>();
+  for (const a of atoms) adj.set(a.id, []);
+  for (const b of bonds) {
+    if (adj.has(b.source) && adj.has(b.target)) {
+      adj.get(b.source)!.push(b.target);
+      adj.get(b.target)!.push(b.source);
+    }
+  }
+
+  // Sort candidate central atoms: transition metals & lanthanides first, then highest coordination degree
+  const candidates = atoms
+    .filter((a) => {
+      const deg = (adj.get(a.id) || []).length;
+      return deg >= 2 && deg <= 6;
+    })
+    .sort((a, b) => {
+      const aMetal = isTransitionMetal(a.element) || isLanthanide(a.element) ? 1 : 0;
+      const bMetal = isTransitionMetal(b.element) || isLanthanide(b.element) ? 1 : 0;
+      if (aMetal !== bMetal) return bMetal - aMetal;
+      return (adj.get(b.id) || []).length - (adj.get(a.id) || []).length;
+    });
+
+  for (const centerAtom of candidates) {
+    const donorIds = adj.get(centerAtom.id) || [];
+    const nLig = donorIds.length;
+    if (nLig < 2 || nLig > 6) continue;
+
+    const globalVisited = new Set<string>([centerAtom.id]);
+    const branches: LigandBranchInfo[] = [];
+    let validStar = true;
+
+    for (const dId of donorIds) {
+      if (globalVisited.has(dId)) {
+        validStar = false;
+        break;
+      }
+      const donor = atoms.find((a) => a.id === dId);
+      if (!donor) {
+        validStar = false;
+        break;
+      }
+
+      const branchAtoms: AtomNode[] = [];
+      const queue: AtomNode[] = [donor];
+      globalVisited.add(dId);
+
+      while (queue.length > 0) {
+        const cur = queue.shift()!;
+        branchAtoms.push(cur);
+        for (const nbId of adj.get(cur.id) || []) {
+          if (nbId === centerAtom.id) continue;
+          if (globalVisited.has(nbId)) {
+            // Cycle or cross-branch link detected (e.g. benzene ring or chelating macrocycle)
+            if (!branchAtoms.some((ba) => ba.id === nbId)) {
+              validStar = false;
+              break;
+            }
+            continue;
+          }
+          globalVisited.add(nbId);
+          const nbAtom = atoms.find((a) => a.id === nbId);
+          if (nbAtom) queue.push(nbAtom);
+        }
+        if (!validStar) break;
+      }
+
+      if (!validStar || branchAtoms.length > 5) {
+        validStar = false;
+        break;
+      }
+
+      const distalAtoms = branchAtoms.filter((a) => a.id !== donor.id);
+      const distalSig = distalAtoms
+        .map((a) => a.element)
+        .sort()
+        .join('');
+      branches.push({
+        donor,
+        distalAtoms,
+        sig: `${donor.element}:${distalSig}`,
+      });
+    }
+
+    if (validStar && globalVisited.size === atoms.length) {
+      const isMonoatomicLigands = branches.every((b) => b.distalAtoms.length === 0);
+      const isMetalCenter =
+        isTransitionMetal(centerAtom.element) || isLanthanide(centerAtom.element);
+      const polyatomicBranchCount = branches.filter((b) => b.distalAtoms.length > 0).length;
+
+      // Prevent non-star multi-center organic molecules like C2H4 (H2C=CH2) from being misidentified
+      // as a 3-branch star around C1 with one "=CH2" polyatomic branch
+      if (!isMonoatomicLigands && !isMetalCenter && polyatomicBranchCount < 2) {
+        continue;
+      }
+
+      return {
+        centerAtom,
+        branches,
+        isMonoatomicLigands,
+      };
+    }
+  }
+
+  return null;
 }
 
 /**
@@ -319,7 +646,12 @@ export function parseChemicalInputToGraph(
             });
           }
         }
-        return { atoms, bonds, title: lines[0]?.trim() || 'Imported Molfile' };
+        const resolved = resolveCoordinationBonds(atoms, bonds);
+        return {
+          atoms: resolved.atoms,
+          bonds: resolved.bonds,
+          title: lines[0]?.trim() || 'Imported Molfile',
+        };
       }
     }
   }
@@ -436,6 +768,13 @@ export function parseChemicalInputToGraph(
   let i = 0;
   while (i < text.length) {
     const ch = text[i];
+    if (ch === '.') {
+      currentAtomId = null;
+      pendingOrder = 1;
+      pendingStereo = 'none';
+      i++;
+      continue;
+    }
     if (ch === '(') {
       if (currentAtomId) branchStack.push(currentAtomId);
       i++;
@@ -535,7 +874,9 @@ export function parseChemicalInputToGraph(
       const prevAtom = atoms.find((a) => a.id === currentAtomId);
       const angle = stepIdx % 2 === 0 ? -Math.PI / 6 : Math.PI / 6;
       const dist = 1.28;
-      const x2d = prevAtom ? Number((prevAtom.x2d + Math.cos(angle) * dist).toFixed(2)) : 0;
+      const x2d = prevAtom
+        ? Number((prevAtom.x2d + Math.cos(angle) * dist).toFixed(2))
+        : Number(((stepIdx - 2) * 0.85).toFixed(2));
       const y2d = prevAtom
         ? Number((prevAtom.y2d + Math.sin(angle) * dist + (branchStack.length > 0 ? 0.65 : 0)).toFixed(2))
         : 0;
@@ -571,7 +912,8 @@ export function parseChemicalInputToGraph(
   }
 
   if (atoms.length === 0) return null;
-  return { atoms, bonds, title: text };
+  const resolved = resolveCoordinationBonds(atoms, bonds);
+  return { atoms: resolved.atoms, bonds: resolved.bonds, title: text };
 }
 
 /**
@@ -879,25 +1221,28 @@ export function reconstruct3DGeometryFromVSEPR(
     ];
   }
 
-  // 2. Check if molecule has a central atom bonded to all other n = atoms.length - 1 ligands (AX_nE_m VSEPR)
-  // Always orient single-center VSEPR molecules (e.g. H2O, H2S, NH3, PH3, BH3, BF3, CH4, SiH4, SO2, SF4, ClF3, PF5, XeOF4, SF6)
-  // into our canonical symmetry axes even when PubChem returns a tilted 3D-SDF conformer.
-  const nLig = atoms.length - 1;
-  const centerAtom =
-    atoms.length >= 3 && atoms.length <= 7
-      ? atoms.find((a) => {
-          const deg = bonds.filter((b) => b.source === a.id || b.target === a.id).length;
-          return deg === nLig;
-        })
-      : undefined;
+  // 2. Check if molecule has a central coordination / VSEPR atom surrounded by nLig ∈ [2, 6] ligand branches
+  // (Supports both monoatomic ligands like H2O, NH3, CH4, SF6, CrCl6, CeCl6 and polyatomic coordination complexes
+  // like Hexacyanoferrate [Fe(CN)6]4-, Ferricyanide [Fe(CN)6]3-, Cr(CO)6, Fe(CO)5, Ni(CO)4, [Ni(CN)4]2-, [Co(NH3)6]3+).
+  const maxAbsZInit = atoms.reduce((m, a) => Math.max(m, Math.abs(a.z3d || 0)), 0);
+  const starTopo = analyzeStarCoordinationTopology(atoms, bonds);
+  const shouldApplyStarVsepr =
+    starTopo !== null &&
+    (starTopo.isMonoatomicLigands ||
+      isTransitionMetal(starTopo.centerAtom.element) ||
+      isLanthanide(starTopo.centerAtom.element) ||
+      starTopo.branches.length >= 5 ||
+      maxAbsZInit <= 0.08);
 
-  if (centerAtom && nLig >= 2 && nLig <= 6) {
-    const rawLigands = atoms.filter((a) => a.id !== centerAtom.id);
-    // Sort ligands so unique elements or higher-bond-order terminal oxo/sulfido ligands (e.g. =O in XeOF4, POCl3, SOCl2)
-    // come first (ligands[0]), ensuring they occupy the axial / unique symmetry site regardless of drawing order.
-    const elemFreq: Record<string, number> = {};
-    for (const l of rawLigands) {
-      elemFreq[l.element] = (elemFreq[l.element] || 0) + 1;
+  if (starTopo && shouldApplyStarVsepr) {
+    const { centerAtom } = starTopo;
+    const nLig = starTopo.branches.length;
+
+    // Sort ligand branches so unique ligand signatures or higher-bond-order terminal oxo/sulfido ligands
+    // come first (sortedBranches[0]), ensuring they occupy the axial / unique symmetry site.
+    const sigFreq: Record<string, number> = {};
+    for (const br of starTopo.branches) {
+      sigFreq[br.sig] = (sigFreq[br.sig] || 0) + 1;
     }
     const getBondOrderToCenter = (lig: AtomNode) => {
       const b = bonds.find(
@@ -909,19 +1254,18 @@ export function reconstruct3DGeometryFromVSEPR(
       if (lig.element === 'O' || lig.element === 'S') return Math.max(b.order, 2);
       return b.order;
     };
-    const ligands = [...rawLigands].sort((a, b) => {
-      const freqDiff = (elemFreq[a.element] || 1) - (elemFreq[b.element] || 1);
-      if (freqDiff !== 0) return freqDiff; // Unique ligand (freq = 1) first
-      return getBondOrderToCenter(b) - getBondOrderToCenter(a);
+    const sortedBranches = [...starTopo.branches].sort((a, b) => {
+      const freqDiff = (sigFreq[a.sig] || 1) - (sigFreq[b.sig] || 1);
+      if (freqDiff !== 0) return freqDiff;
+      return getBondOrderToCenter(b.donor) - getBondOrderToCenter(a.donor);
     });
+    const ligands = sortedBranches.map((br) => br.donor);
 
     const isMetalCenter =
       isTransitionMetal(centerAtom.element) || isLanthanide(centerAtom.element);
     const lonePairs = getCentralAtomLonePairs(centerAtom, atoms, bonds, charge);
     const rCenter = ELEMENT_PROPERTIES[centerAtom.element]?.covalentRadius ?? 0.8;
-    // Hypervalent 3c-4e species (lonePairs >= 2 or nLig >= 5) have fractional bond order and slightly longer bonds
     const scaleFactor = lonePairs >= 2 || nLig >= 5 ? 0.98 : 0.96;
-    const maxAbsZInit = atoms.reduce((m, a) => Math.max(m, Math.abs(a.z3d || 0)), 0);
     const getBondLen = (lig: AtomNode) => {
       if (maxAbsZInit > 0.08) {
         const d3d = Math.hypot(
@@ -942,12 +1286,10 @@ export function reconstruct3DGeometryFromVSEPR(
     if (nLig === 2) {
       const r1 = getBondLen(ligands[0]);
       const r2 = getBondLen(ligands[1]);
-      // AX2E0 (CO2, BeF2, HCN, OCS), linear ML2, or AX2E3 (XeF2) -> Linear along x-axis
       if (isMetalCenter || lonePairs === 0 || lonePairs >= 3) {
         coords3D.set(ligands[0].id, [-r1, 0, 0]);
         coords3D.set(ligands[1].id, [r2, 0, 0]);
       } else {
-        // AX2E0.5 (NO2, 134.3°), AX2E1 (SO2, O3, 119°), or AX2E2 (H2O, H2S, OF2, SCl2, 104.5°) -> Bent in xy plane
         const totalValence = atoms.reduce(
           (s, a) => s + (ELEMENT_PROPERTIES[a.element]?.valenceElectrons ?? 4),
           -charge
@@ -969,7 +1311,6 @@ export function reconstruct3DGeometryFromVSEPR(
       }
     } else if (nLig === 3) {
       if (isMetalCenter || lonePairs === 0) {
-        // AX3E0 (BF3, BH3, SO3, BCl3, ML3) -> Trigonal planar in xy plane (z = 0)
         ligands.forEach((lig, idx) => {
           const r = getBondLen(lig);
           const phi = Math.PI / 2 + (idx * 2 * Math.PI) / 3;
@@ -980,7 +1321,6 @@ export function reconstruct3DGeometryFromVSEPR(
           ]);
         });
       } else if (lonePairs === 1) {
-        // AX3E1 (NH3, PH3, PCl3, NF3) -> Trigonal pyramidal (C3v with C3 along y-axis)
         coords3D.set(centerAtom.id, [0, 0.38, 0]);
         ligands.forEach((lig, idx) => {
           const r = getBondLen(lig);
@@ -993,7 +1333,6 @@ export function reconstruct3DGeometryFromVSEPR(
           ]);
         });
       } else {
-        // AX3E2 (ClF3, BrF3) -> T-shaped (C2v with equatorial stem along -y and axial along ±x)
         const rEq = getBondLen(ligands[0]);
         const rAx1 = getBondLen(ligands[1]) * 1.05;
         const rAx2 = getBondLen(ligands[2]) * 1.05;
@@ -1003,8 +1342,14 @@ export function reconstruct3DGeometryFromVSEPR(
         coords3D.set(ligands[2].id, [Number(rAx2.toFixed(3)), 0.12, 0]);
       }
     } else if (nLig === 4) {
-      if ((isMetalCenter && !isSquarePlanarMetal(centerAtom.element)) || (!isMetalCenter && lonePairs === 0)) {
-        // AX4E0 (CH4, SiH4, CCl4, TiCl4) -> Tetrahedral (Td / C3v)
+      const isD10Carbonyl =
+        centerAtom.element === 'Ni' &&
+        charge === 0 &&
+        sortedBranches.every((b) => b.sig === 'C:O');
+      const isSqPlanarMetal = isSquarePlanarMetal(centerAtom.element) && !isD10Carbonyl;
+
+      if ((isMetalCenter && !isSqPlanarMetal) || (!isMetalCenter && lonePairs === 0)) {
+        // AX4E0 (CH4, SiH4, CCl4, TiCl4, Ni(CO)4) -> Tetrahedral (Td / C3v)
         const tetDirs: [number, number, number][] = [
           [0.8165, 0.5774, 0],
           [-0.8165, 0.5774, 0],
@@ -1021,7 +1366,6 @@ export function reconstruct3DGeometryFromVSEPR(
           ]);
         });
       } else if (!isMetalCenter && lonePairs === 1) {
-        // AX4E1 (SF4, SeF4, TeCl4) -> Seesaw / Disphenoidal (C2v: 2 eq in xy, 2 ax along ±z)
         const rEq = getBondLen(ligands[0]);
         const rAx = getBondLen(ligands[2]) * 1.06;
         const eqAngle = (50.8 * Math.PI) / 180;
@@ -1039,7 +1383,7 @@ export function reconstruct3DGeometryFromVSEPR(
         coords3D.set(ligands[2].id, [0, 0.14, Number(rAx.toFixed(3))]);
         coords3D.set(ligands[3].id, [0, 0.14, Number((-rAx).toFixed(3))]);
       } else {
-        // AX4E2 (XeF4) or d8 square-planar transition metal (PtCl4, PdCl4, NiCl4, AuCl4) -> Square planar in xy plane (D4h, z = 0)
+        // AX4E2 (XeF4) or d8 square-planar transition metal (PtCl4, [Ni(CN)4]2-, PdCl4, AuCl4) -> Square planar in xy plane (D4h, z = 0)
         const sqDirs: [number, number, number][] = [
           [1, 0, 0],
           [-1, 0, 0],
@@ -1073,7 +1417,6 @@ export function reconstruct3DGeometryFromVSEPR(
         coords3D.set(ligands[3].id, [0, 0, Number(rAx1.toFixed(3))]);
         coords3D.set(ligands[4].id, [0, 0, Number((-rAx2).toFixed(3))]);
       } else {
-        // AX5E1 (BrF5, IF5, XeOF4) -> Square pyramidal (C4v: 1 axial at +y, 4 basal in xz)
         const rAx = getBondLen(ligands[0]);
         coords3D.set(ligands[0].id, [0, Number(rAx.toFixed(3)), 0]);
         const basalDirs: [number, number][] = [
@@ -1094,7 +1437,7 @@ export function reconstruct3DGeometryFromVSEPR(
       }
     } else if (nLig === 6) {
       if (isMetalCenter || lonePairs === 0) {
-        // AX6E0 (SF6) or transition-metal / lanthanide ML6 (CrCl6, CeCl6) -> Regular Octahedral (Oh)
+        // AX6E0 (SF6) or transition-metal / lanthanide ML6 ([Fe(CN)6]4-, Cr(CO)6, CrCl6, CeCl6) -> Regular Octahedral (Oh)
         const octDirs: [number, number, number][] = [
           [1, 0, 0],
           [-1, 0, 0],
@@ -1113,7 +1456,6 @@ export function reconstruct3DGeometryFromVSEPR(
           ]);
         });
       } else {
-        // AX6E1 (XeF6) -> Distorted Monocapped Octahedron (C3v along y-axis)
         for (let i = 0; i < 3; i++) {
           const lig = ligands[i];
           const r = getBondLen(lig);
@@ -1138,6 +1480,74 @@ export function reconstruct3DGeometryFromVSEPR(
             Number((rProj * Math.sin(phi)).toFixed(3)),
           ]);
         }
+      }
+    }
+
+    // Propagate 3D coordinates outward along each polyatomic ligand branch (e.g. N in Fe-C≡N, O in Cr-C≡O, H3 in Co-NH3)
+    const centerPos = coords3D.get(centerAtom.id) || [0, 0, 0];
+    for (const br of sortedBranches) {
+      if (br.distalAtoms.length === 0) continue;
+      const dPos = coords3D.get(br.donor.id);
+      if (!dPos) continue;
+      const vx = dPos[0] - centerPos[0];
+      const vy = dPos[1] - centerPos[1];
+      const vz = dPos[2] - centerPos[2];
+      const vLen = Math.hypot(vx, vy, vz) || 1;
+      const ux = vx / vLen;
+      const uy = vy / vLen;
+      const uz = vz / vLen;
+
+      if (br.distalAtoms.length === 1) {
+        const distal = br.distalAtoms[0];
+        const b = bonds.find(
+          (edge) =>
+            (edge.source === br.donor.id && edge.target === distal.id) ||
+            (edge.target === br.donor.id && edge.source === distal.id)
+        );
+        const rDonor = ELEMENT_PROPERTIES[br.donor.element]?.covalentRadius ?? 0.75;
+        const rDistal = ELEMENT_PROPERTIES[distal.element]?.covalentRadius ?? 0.68;
+        const bondScale = b && b.order >= 2 ? 0.84 : 0.95;
+        const distLen = Number(((rDonor + rDistal) * bondScale).toFixed(3));
+        // Linear diatomic ligands (-C≡N, -C≡O, -N≡O, -C=O) extend strictly collinearly along u
+        coords3D.set(distal.id, [
+          Number((dPos[0] + ux * distLen).toFixed(3)),
+          Number((dPos[1] + uy * distLen).toFixed(3)),
+          Number((dPos[2] + uz * distLen).toFixed(3)),
+        ]);
+      } else {
+        // Multi-atom conical substituent branch (e.g. -NH3, -OH2, -CH3, -NO2)
+        const refX = Math.abs(uz) < 0.9 ? 0 : 1;
+        const refZ = Math.abs(uz) < 0.9 ? 1 : 0;
+        let e1x = uy * refZ;
+        let e1y = uz * refX - ux * refZ;
+        let e1z = -uy * refX;
+        const e1Len = Math.hypot(e1x, e1y, e1z) || 1;
+        e1x /= e1Len;
+        e1y /= e1Len;
+        e1z /= e1Len;
+        const e2x = uy * e1z - uz * e1y;
+        const e2y = uz * e1x - ux * e1z;
+        const e2z = ux * e1y - uy * e1x;
+
+        const kCount = br.distalAtoms.length;
+        const cosTheta = 0.52;
+        const sinTheta = 0.854;
+        br.distalAtoms.forEach((distal, mIdx) => {
+          const rDonor = ELEMENT_PROPERTIES[br.donor.element]?.covalentRadius ?? 0.72;
+          const rDistal = ELEMENT_PROPERTIES[distal.element]?.covalentRadius ?? 0.35;
+          const distLen = (rDonor + rDistal) * 0.95;
+          const phi = (mIdx * 2 * Math.PI) / kCount;
+          const cp = Math.cos(phi);
+          const sp = Math.sin(phi);
+          const dirX = cosTheta * ux + sinTheta * (cp * e1x + sp * e2x);
+          const dirY = cosTheta * uy + sinTheta * (cp * e1y + sp * e2y);
+          const dirZ = cosTheta * uz + sinTheta * (cp * e1z + sp * e2z);
+          coords3D.set(distal.id, [
+            Number((dPos[0] + dirX * distLen).toFixed(3)),
+            Number((dPos[1] + dirY * distLen).toFixed(3)),
+            Number((dPos[2] + dirZ * distLen).toFixed(3)),
+          ]);
+        });
       }
     }
 
@@ -1272,21 +1682,22 @@ export function detectPointGroup(atoms: AtomNode[], bonds: BondEdge[], charge = 
     return 'C2v';
   }
 
-  // Central atom surrounded by nLig ligands (AX_nE_m VSEPR & d/f coordination point-group classification)
-  const centerAtom = atoms.find((a) => {
-    const deg = bonds.filter((b) => b.source === a.id || b.target === a.id).length;
-    return deg >= 3 && deg === atoms.length - 1;
-  });
+  // Central atom surrounded by nLig ligands (AX_nE_m VSEPR & d/f coordination point-group classification,
+  // supporting both monoatomic ligands and polyatomic ligands like -CN, -CO, -NO, -NH3)
+  const starTopo = analyzeStarCoordinationTopology(atoms, bonds);
 
-  if (centerAtom) {
-    const ligands = atoms.filter((a) => a.id !== centerAtom.id);
-    const ligandElements = new Set(ligands.map((a) => a.element));
-    const nLig = ligands.length;
+  if (starTopo) {
+    const { centerAtom, branches } = starTopo;
+    const ligandSigs = new Set(branches.map((b) => b.sig));
+    const nLig = branches.length;
     const isMetalCenter =
       isTransitionMetal(centerAtom.element) || isLanthanide(centerAtom.element);
     const lonePairs = getCentralAtomLonePairs(centerAtom, atoms, bonds, charge);
 
-    if (ligandElements.size === 1) {
+    if (ligandSigs.size === 1) {
+      if (nLig === 2) {
+        return isMetalCenter || lonePairs === 0 || lonePairs >= 3 ? 'Dinfh' : 'C2v';
+      }
       if (nLig === 3) {
         // AX3E0 (BF3, SO3) or ML3 -> D3h; AX3E1 (NH3, PCl3) -> C3v; AX3E2 (ClF3) -> C2v
         if (isMetalCenter || lonePairs === 0) return 'D3h';
@@ -1295,7 +1706,11 @@ export function detectPointGroup(atoms: AtomNode[], bonds: BondEdge[], charge = 
       }
       if (nLig === 4) {
         if (isMetalCenter) {
-          return isSquarePlanarMetal(centerAtom.element) ? 'D4h' : 'Td';
+          const isD10Carbonyl =
+            centerAtom.element === 'Ni' &&
+            charge === 0 &&
+            branches.every((b) => b.sig === 'C:O');
+          return isSquarePlanarMetal(centerAtom.element) && !isD10Carbonyl ? 'D4h' : 'Td';
         }
         // AX4E0 (CH4, CCl4) -> Td; AX4E1 (SF4) -> C2v; AX4E2 (XeF4) -> D4h
         if (lonePairs === 0) return 'Td';
@@ -1307,30 +1722,39 @@ export function detectPointGroup(atoms: AtomNode[], bonds: BondEdge[], charge = 
         return isMetalCenter || lonePairs === 0 ? 'D3h' : 'C4v';
       }
       if (nLig === 6) {
-        // AX6E0 (SF6) or transition-metal/lanthanide ML6 (CrCl6, CeCl6) -> Oh; AX6E1 (XeF6) -> C3v
+        // AX6E0 (SF6) or transition-metal/lanthanide ML6 ([Fe(CN)6]4-, Cr(CO)6, CrCl6, CeCl6) -> Oh; AX6E1 (XeF6) -> C3v
         return isMetalCenter || lonePairs === 0 ? 'Oh' : 'C3v';
       }
     }
 
-    if (ligandElements.size === 2) {
-      const elemCounts = Array.from(ligandElements).map(
-        (el) => ligands.filter((l) => l.element === el).length
+    if (ligandSigs.size === 2) {
+      const sigCounts = Array.from(ligandSigs).map(
+        (sig) => branches.filter((b) => b.sig === sig).length
       );
+      if (nLig === 2) {
+        return isMetalCenter || lonePairs === 0 || lonePairs >= 3 ? 'Cinfv' : 'Cs';
+      }
       if (nLig === 3) {
         // AX2Y: planar (CH2O, COCl2 -> C2v) vs pyramidal (SOCl2 -> Cs)
         return isMetalCenter || lonePairs === 0 ? 'C2v' : 'Cs';
       }
-      if (nLig === 4 && elemCounts.includes(3)) {
+      if (nLig === 4 && sigCounts.includes(3)) {
         // AX3Y tetrahedral (CHCl3, POCl3 -> C3v)
         return isMetalCenter || lonePairs === 0 ? 'C3v' : 'Cs';
       }
-      if (nLig === 5 && elemCounts.includes(4)) {
+      if (nLig === 4 && sigCounts.includes(2)) {
+        return 'C2v';
+      }
+      if (nLig === 5 && sigCounts.includes(4)) {
         // AX4Y square pyramidal (XeOF4 -> C4v)
         return 'C4v';
       }
-      if (nLig === 6 && elemCounts.includes(5)) {
-        // ML5Y monosubstituted octahedral -> C4v
+      if (nLig === 6 && sigCounts.includes(5)) {
+        // ML5Y monosubstituted octahedral (e.g. [Fe(CN)5(NO)]2- -> C4v)
         return 'C4v';
+      }
+      if (nLig === 6 && sigCounts.includes(4)) {
+        return 'D4h';
       }
     }
   }
@@ -1762,13 +2186,24 @@ export function analyzeMolecularGraph(
     );
   }
 
-  // 2. Otherwise, expand implicit hydrogens (for small/medium graphs <= 24 atoms),
-  //    reconstruct 3D VSEPR coordinates if flat (z3d ≈ 0),
+  // 2. Otherwise, resolve any unlinked dative metal-ligand coordination bonds,
+  //    expand implicit hydrogens (for small/medium graphs <= 24 atoms),
+  //    reconstruct 3D VSEPR / coordination coordinates,
   //    and run the full s-p-d-f Extended Hückel LCAO-MO + Symmetry solver
-  const shouldExpandImplicitH = rawAtoms.length <= 24;
-  const { atoms, bonds } = shouldExpandImplicitH
-    ? expandImplicitHydrogens(rawAtoms, rawBonds)
+  const hasDisconnectedMetalCenter = rawAtoms.some(
+    (a) =>
+      (isTransitionMetal(a.element) || isLanthanide(a.element)) &&
+      rawBonds.filter((b) => b.source === a.id || b.target === a.id).length === 0 &&
+      rawAtoms.length >= 3
+  );
+  const coordResolved = hasDisconnectedMetalCenter
+    ? resolveCoordinationBonds(rawAtoms, rawBonds, false)
     : { atoms: rawAtoms, bonds: rawBonds };
+
+  const shouldExpandImplicitH = coordResolved.atoms.length <= 24;
+  const { atoms, bonds } = shouldExpandImplicitH
+    ? expandImplicitHydrogens(coordResolved.atoms, coordResolved.bonds)
+    : { atoms: coordResolved.atoms, bonds: coordResolved.bonds };
   const { formula } = computeMolecularFormula(atoms, bonds, !shouldExpandImplicitH);
   const smiles = generateSmilesFromGraph(atoms, bonds);
   const centeredAtoms = reconstruct3DGeometryFromVSEPR(atoms, bonds, charge);
@@ -1778,7 +2213,8 @@ export function analyzeMolecularGraph(
   const { basis, eigenvalues, eigenvectors } = runExtendedHuckelSolver(centeredAtoms, bonds);
   const N = basis.length;
 
-  // Exact physical neutral valence electrons = sum(Z_val) of active basis atoms (clamped to s-p-d-f basis capacity + formalCharge)
+  // Exact physical neutral valence electrons = sum(Z_val) of active basis atoms (clamped to s-p-d-f basis capacity).
+  // Formal charges on individual atoms are only subtracted here when options.charge is 0 to prevent double-counting.
   const activeBasisAtomIds = new Set(basis.map((b) => b.atom.id));
   const rawValenceElectrons = centeredAtoms
     .filter((a) => activeBasisAtomIds.has(a.id))
@@ -1791,7 +2227,8 @@ export function analyzeMolecularGraph(
           : a.element === 'H' || a.element === 'He'
             ? 2
             : 8;
-      const v = Math.min(maxBasisCap, props?.valenceElectrons ?? 4) - (a.formalCharge ?? 0);
+      const atomChg = charge === 0 ? (a.formalCharge ?? 0) : 0;
+      const v = Math.min(maxBasisCap, props?.valenceElectrons ?? 4) - atomChg;
       return sum + Math.max(0, v);
     }, 0);
   const neutralElectrons = Math.max(1, Math.min(N * 2, rawValenceElectrons));
@@ -1803,7 +2240,10 @@ export function analyzeMolecularGraph(
   const isPlanarXY = maxAbsZ < 0.15;
 
   // Identify central / primary skeleton atom and peripheral ligand atom for dynamic fragment orbitals
+  const starTopo = analyzeStarCoordinationTopology(centeredAtoms, bonds);
   const primaryAtom =
+    starTopo?.centerAtom ||
+    centeredAtoms.find((a) => isTransitionMetal(a.element) || isLanthanide(a.element)) ||
     centeredAtoms.find((a) => {
       const deg = bonds.filter((b) => b.source === a.id || b.target === a.id).length;
       return deg >= 2 && deg === centeredAtoms.length - 1;
@@ -1811,7 +2251,9 @@ export function analyzeMolecularGraph(
     centeredAtoms.find((a) => a.element !== 'H') ||
     centeredAtoms[0];
   const peripheralAtom =
-    centeredAtoms.find((a) => a.id !== primaryAtom?.id) || primaryAtom;
+    starTopo?.branches[0]?.donor ||
+    centeredAtoms.find((a) => a.id !== primaryAtom?.id) ||
+    primaryAtom;
 
   const primProps = ELEMENT_PROPERTIES[primaryAtom?.element || 'C'] || ELEMENT_PROPERTIES.C;
   const periphProps = ELEMENT_PROPERTIES[peripheralAtom?.element || 'H'] || ELEMENT_PROPERTIES.H;
@@ -1901,14 +2343,15 @@ export function analyzeMolecularGraph(
     },
   ];
 
-  // Select all valence MOs when N <= 14 (e.g. C2H4 with 12 AOs), or a 12-orbital frontier window for larger systems without slicing degenerate pairs
-  const homoIdx = Math.max(0, Math.min(N - 1, Math.floor((neutralElectrons - 1) / 2)));
+  // Select all valence MOs when N <= 14 (e.g. C2H4 with 12 AOs), or a frontier window for larger systems without slicing degenerate doublets or triplets
+  const EffectiveTotalElectrons = Math.max(1, Math.min(N * 2, neutralElectrons - charge));
+  const homoIdx = Math.max(0, Math.min(N - 1, Math.floor((EffectiveTotalElectrons - 1) / 2)));
   let startIdx = N <= 14 ? 0 : Math.max(0, Math.min(homoIdx - 5, N - 12));
   let endIdx = N <= 14 ? N - 1 : Math.min(N - 1, Math.max(homoIdx + 5, startIdx + 11));
-  if (startIdx > 0 && Math.abs(eigenvalues[startIdx] - eigenvalues[startIdx - 1]) < 0.08) {
+  while (startIdx > 0 && Math.abs(eigenvalues[startIdx] - eigenvalues[startIdx - 1]) < 0.08) {
     startIdx -= 1;
   }
-  if (endIdx < N - 1 && Math.abs(eigenvalues[endIdx] - eigenvalues[endIdx + 1]) < 0.08) {
+  while (endIdx < N - 1 && Math.abs(eigenvalues[endIdx] - eigenvalues[endIdx + 1]) < 0.08) {
     endIdx += 1;
   }
 
@@ -2078,21 +2521,50 @@ export function analyzeMolecularGraph(
       irrepObj =
         candidateIrreps.find((ir) => ir.id === prevMo.irrepId) || candidateIrreps[0];
     } else if (isDegenerate && dimMultiIrreps.length > 0) {
+      // Count degeneracy multiplicity (2 for E doublets, 3 for T triplets in Oh / Td)
+      let multipletSize = 1;
+      while (
+        idx + multipletSize <= endIdx &&
+        Math.abs(eigenvalues[idx + multipletSize] - eigenvalues[idx]) < 0.08
+      ) {
+        multipletSize++;
+      }
+      const targetDim = multipletSize >= 3 ? 3 : 2;
+      const dimMatchedIrreps = dimMultiIrreps.filter((ir) => ir.dimension === targetDim);
+      const multiPool = dimMatchedIrreps.length > 0 ? dimMatchedIrreps : dimMultiIrreps;
+
       if (pg.id === 'D3h') {
         irrepObj =
-          dimMultiIrreps.find((ir) => (isPi ? ir.id === 'Epp' : ir.id === 'Ep')) ||
-          dimMultiIrreps[0];
+          multiPool.find((ir) => (isPi ? ir.id === 'Epp' : ir.id === 'Ep')) ||
+          multiPool[0];
       } else {
-        // Check inversion / ungerade vs gerade character
-        const centerWeight = primaryAtom
-          ? vec.reduce((s, c, k) => s + (basis[k].atom.id === primaryAtom.id ? c * c : 0), 0)
-          : 0.5;
+        const centerDWeight = primaryAtom
+          ? vec.reduce(
+              (s, c, k) =>
+                s +
+                (basis[k].atom.id === primaryAtom.id && basis[k].orbital.startsWith('d')
+                  ? c * c
+                  : 0),
+              0
+            )
+          : 0;
+        const centerPWeight = primaryAtom
+          ? vec.reduce(
+              (s, c, k) =>
+                s +
+                (basis[k].atom.id === primaryAtom.id &&
+                (basis[k].orbital === 'px' || basis[k].orbital === 'py' || basis[k].orbital === 'pz')
+                  ? c * c
+                  : 0),
+              0
+            )
+          : 0;
         const preferUngerade =
-          heavyCount === 2 ? bondingType === 'bonding' : centerWeight > 0.08;
+          heavyCount === 2 ? bondingType === 'bonding' : centerPWeight > 0.05 && centerDWeight < 0.1;
         irrepObj =
-          dimMultiIrreps.find((ir) =>
+          multiPool.find((ir) =>
             preferUngerade ? ir.symbol.includes('u') : ir.symbol.includes('g')
-          ) || dimMultiIrreps[0];
+          ) || multiPool[0];
       }
     } else if (dim1Irreps.length > 0) {
       if (pg.id === 'Cinfv') {

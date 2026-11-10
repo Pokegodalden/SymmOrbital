@@ -621,5 +621,85 @@ test('Full 5-orbital d and 7-orbital 4f Slater-Koster basis, Hunds rule t2g3 fil
   assert.ok(ndf3Anal.leftFragmentTitle.includes('4f'), 'Expected lanthanide leftFragmentTitle to list 4f shell');
 });
 
+test('Disconnected coordination complexes (hexacyanoferrate [Fe(CN)6]4-, Cr(CO)6, Fe(CO)5, [Ni(CN)4]2-, Ni(CO)4) infer metal-ligand σ bonds and reconstruct 3D Oh / D3h / D4h / Td symmetry', async () => {
+  const { parseChemicalInputToGraph, resolveCoordinationBonds } = await import('./moEngine.ts');
+
+  // 1. Hexacyanoferrate ([Fe(CN)6]4-, PubChem CID 9552077):
+  // PubChem 2D-SDF stores Fe1 + 6 disconnected C≡N ligands at z=0 with NO Fe-C bonds.
+  const rawFeCN6Atoms = [
+    { id: 'Fe1', element: 'Fe' as const, x2d: 5.13, y2d: -1.16, x3d: 5.13, y3d: 1.16, z3d: 0 },
+    { id: 'N1', element: 'N' as const, x2d: 2.87, y2d: -0.5, x3d: 2.87, y3d: 0.5, z3d: 0 },
+    { id: 'N2', element: 'N' as const, x2d: 2.87, y2d: -3.5, x3d: 2.87, y3d: 3.5, z3d: 0 },
+    { id: 'N3', element: 'N' as const, x2d: 2.87, y2d: 2.5, x3d: 2.87, y3d: -2.5, z3d: 0 },
+    { id: 'N4', element: 'N' as const, x2d: 5.95, y2d: -0.5, x3d: 5.95, y3d: 0.5, z3d: 0 },
+    { id: 'N5', element: 'N' as const, x2d: 5.95, y2d: -3.5, x3d: 5.95, y3d: 3.5, z3d: 0 },
+    { id: 'N6', element: 'N' as const, x2d: 5.95, y2d: 2.5, x3d: 5.95, y3d: -2.5, z3d: 0 },
+    { id: 'C1', element: 'C' as const, x2d: 2.0, y2d: 0.0, x3d: 2.0, y3d: 0.0, z3d: 0 },
+    { id: 'C2', element: 'C' as const, x2d: 2.0, y2d: -3.0, x3d: 2.0, y3d: 3.0, z3d: 0 },
+    { id: 'C3', element: 'C' as const, x2d: 2.0, y2d: 3.0, x3d: 2.0, y3d: -3.0, z3d: 0 },
+    { id: 'C4', element: 'C' as const, x2d: 5.08, y2d: 0.0, x3d: 5.08, y3d: 0.0, z3d: 0 },
+    { id: 'C5', element: 'C' as const, x2d: 5.08, y2d: -3.0, x3d: 5.08, y3d: 3.0, z3d: 0 },
+    { id: 'C6', element: 'C' as const, x2d: 5.08, y2d: 3.0, x3d: 5.08, y3d: -3.0, z3d: 0 },
+  ];
+  const rawFeCN6Bonds = [
+    { id: 'sdf_b_1', source: 'N1', target: 'C1', order: 3 as const },
+    { id: 'sdf_b_2', source: 'N2', target: 'C2', order: 3 as const },
+    { id: 'sdf_b_3', source: 'N3', target: 'C3', order: 3 as const },
+    { id: 'sdf_b_4', source: 'N4', target: 'C4', order: 3 as const },
+    { id: 'sdf_b_5', source: 'N5', target: 'C5', order: 3 as const },
+    { id: 'sdf_b_6', source: 'N6', target: 'C6', order: 3 as const },
+  ];
+
+  const resolvedFeCN6 = resolveCoordinationBonds(rawFeCN6Atoms, rawFeCN6Bonds, true);
+  assert.equal(resolvedFeCN6.bonds.length, 12, 'Expected 6 C≡N bonds + 6 inferred Fe-C coordination bonds');
+  const feBonds = resolvedFeCN6.bonds.filter((b) => b.source === 'Fe1' || b.target === 'Fe1');
+  assert.equal(feBonds.length, 6, 'Expected all 6 cyanide ligands to bond to Fe1 via Carbon');
+  for (const b of feBonds) {
+    const partnerId = b.source === 'Fe1' ? b.target : b.source;
+    assert.ok(partnerId.startsWith('C'), `Expected Fe1 to bond to C donor atom, got ${partnerId}`);
+  }
+
+  const fecn6Analyzed = analyzeMolecularGraph(rawFeCN6Atoms, rawFeCN6Bonds, {
+    customName: 'Hexacyanoferrate(II)',
+    charge: -4,
+  });
+  assert.equal(fecn6Analyzed.pointGroupId, 'Oh', 'Hexacyanoferrate must have octahedral (Oh) symmetry');
+  assert.equal(fecn6Analyzed.formula, 'C6FeN6', 'Coordinated cyanide carbons must not gain implicit hydrogens');
+  const maxAbsZ = fecn6Analyzed.atoms.reduce((m, a) => Math.max(m, Math.abs(a.z3d)), 0);
+  assert.ok(maxAbsZ > 1.8, `Expected 3D octahedral axial ligands along ±z (max |z3d| = ${maxAbsZ})`);
+
+  // Verify collinear Fe-C-N軸 on all 6 octahedral branches
+  const feCenter = fecn6Analyzed.atoms.find((a) => a.id === 'Fe1')!;
+  assert.ok(Math.hypot(feCenter.x3d, feCenter.y3d, feCenter.z3d) < 1e-4, 'Fe1 must sit at 3D origin');
+  for (let k = 1; k <= 6; k++) {
+    const cAtom = fecn6Analyzed.atoms.find((a) => a.id === `C${k}`)!;
+    const nAtom = fecn6Analyzed.atoms.find((a) => a.id === `N${k}`)!;
+    const rC = Math.hypot(cAtom.x3d, cAtom.y3d, cAtom.z3d);
+    const rN = Math.hypot(nAtom.x3d, nAtom.y3d, nAtom.z3d);
+    assert.ok(rC > 1.7 && rC < 2.2, `Expected Fe-C bond distance ~1.93 Å, got ${rC}`);
+    assert.ok(rN > rC + 1.0, `Expected terminal N atom radially outward from C (rN=${rN}, rC=${rC})`);
+  }
+
+  // 2. Disconnected PubChem SMILES for Cr(CO)6, Fe(CO)5, [Ni(CN)4]2-, and Ni(CO)4
+  const crCO6 = parseChemicalInputToGraph('[C-]#[O+].[C-]#[O+].[C-]#[O+].[C-]#[O+].[C-]#[O+].[C-]#[O+].[Cr]', 'SMILES')!;
+  const crCO6Entry = analyzeMolecularGraph(crCO6.atoms, crCO6.bonds);
+  assert.equal(crCO6Entry.pointGroupId, 'Oh', 'Cr(CO)6 must be Octahedral (Oh)');
+  assert.equal(crCO6Entry.bonds.filter((b) => b.source === 'Cr1' || b.target === 'Cr1').length, 6);
+
+  const feCO5 = parseChemicalInputToGraph('[C]=O.[C]=O.[C]=O.[C]=O.[C]=O.[Fe]', 'SMILES')!;
+  const feCO5Entry = analyzeMolecularGraph(feCO5.atoms, feCO5.bonds);
+  assert.equal(feCO5Entry.pointGroupId, 'D3h', 'Fe(CO)5 must be Trigonal Bipyramidal (D3h)');
+  assert.equal(feCO5Entry.bonds.filter((b) => b.source === 'Fe1' || b.target === 'Fe1').length, 5);
+
+  const niCN4 = parseChemicalInputToGraph('[C-]#N.[C-]#N.[C-]#N.[C-]#N.[Ni+2]', 'SMILES')!;
+  const niCN4Entry = analyzeMolecularGraph(niCN4.atoms, niCN4.bonds, { charge: -2 });
+  assert.equal(niCN4Entry.pointGroupId, 'D4h', '[Ni(CN)4]2- (d8) must be Square Planar (D4h)');
+
+  const niCO4 = parseChemicalInputToGraph('[C-]#[O+].[C-]#[O+].[C-]#[O+].[C-]#[O+].[Ni]', 'SMILES')!;
+  const niCO4Entry = analyzeMolecularGraph(niCO4.atoms, niCO4.bonds);
+  assert.equal(niCO4Entry.pointGroupId, 'Td', 'Ni(CO)4 (d10) must be Tetrahedral (Td)');
+});
+
+
 
 

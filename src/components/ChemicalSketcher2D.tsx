@@ -73,6 +73,8 @@ export const ChemicalSketcher2D: React.FC<ChemicalSketcher2DProps> = ({
   const [showHeaderOptions, setShowHeaderOptions] = useState<boolean>(false);
   const [isFullSketcherOpen, setIsFullSketcherOpen] = useState<boolean>(false);
   const [draggingAtomId, setDraggingAtomId] = useState<string | null>(null);
+  const [selectedAtomId, setSelectedAtomId] = useState<string | null>(null);
+  const [cursorChemPos, setCursorChemPos] = useState<{ x: number; y: number } | null>(null);
   const [hoveredAtomId, setHoveredAtomId] = useState<string | null>(null);
   const [hoveredBondId, setHoveredBondId] = useState<string | null>(null);
   const [canvasFocused, setCanvasFocused] = useState<boolean>(false);
@@ -86,6 +88,17 @@ export const ChemicalSketcher2D: React.FC<ChemicalSketcher2DProps> = ({
   useEffect(() => {
     setZoomFactor(1.0);
   }, [atoms.length]);
+
+  // Clear selected atom if tool changes or atom is removed
+  useEffect(() => {
+    setSelectedAtomId(null);
+  }, [activeTool]);
+
+  useEffect(() => {
+    if (selectedAtomId && !atoms.some((a) => a.id === selectedAtomId)) {
+      setSelectedAtomId(null);
+    }
+  }, [atoms, selectedAtomId]);
 
   // Dynamic coordinate conversion between SVG pixels (460 x 340) and chemical Angstrom space
   // Auto-scales to fit large polyenes (e.g. β-Carotene ~29 Å) and biomolecules (e.g. ATP ~19 Å)
@@ -132,6 +145,7 @@ export const ChemicalSketcher2D: React.FC<ChemicalSketcher2DProps> = ({
     const prev = history[history.length - 1];
     setRedoStack((r) => [...r, { atoms, bonds }]);
     setHistory((h) => h.slice(0, -1));
+    setSelectedAtomId(null);
     onChangeGraph(prev.atoms, prev.bonds, prev.title);
   };
 
@@ -140,6 +154,7 @@ export const ChemicalSketcher2D: React.FC<ChemicalSketcher2DProps> = ({
     const next = redoStack[redoStack.length - 1];
     setHistory((h) => [...h, { atoms, bonds }]);
     setRedoStack((r) => r.slice(0, -1));
+    setSelectedAtomId(null);
     onChangeGraph(next.atoms, next.bonds, next.title);
   };
 
@@ -152,6 +167,11 @@ export const ChemicalSketcher2D: React.FC<ChemicalSketcher2DProps> = ({
         document.activeElement?.tagName === 'TEXTAREA' ||
         document.activeElement?.tagName === 'SELECT'
       ) {
+        return;
+      }
+
+      if (e.key === 'Escape') {
+        setSelectedAtomId(null);
         return;
       }
 
@@ -187,6 +207,7 @@ export const ChemicalSketcher2D: React.FC<ChemicalSketcher2DProps> = ({
           const nextBonds = bonds.filter(
             (b) => b.source !== hoveredAtomId && b.target !== hoveredAtomId
           );
+          if (selectedAtomId === hoveredAtomId) setSelectedAtomId(null);
           commitGraphChange(nextAtoms, nextBonds);
         } else if (hoveredBondId) {
           commitGraphChange(
@@ -199,7 +220,7 @@ export const ChemicalSketcher2D: React.FC<ChemicalSketcher2DProps> = ({
 
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [canvasFocused, hoveredAtomId, hoveredBondId, atoms, bonds, history, redoStack]);
+  }, [canvasFocused, hoveredAtomId, hoveredBondId, selectedAtomId, atoms, bonds, history, redoStack]);
 
   const getNextAtomId = (el: ElementSymbol, currentAtoms: AtomNode[]) => {
     const existingNums = currentAtoms
@@ -258,6 +279,7 @@ export const ChemicalSketcher2D: React.FC<ChemicalSketcher2DProps> = ({
         });
       }
 
+      setSelectedAtomId(null);
       commitGraphChange(
         newAtoms,
         newBonds,
@@ -273,71 +295,21 @@ export const ChemicalSketcher2D: React.FC<ChemicalSketcher2DProps> = ({
       activeTool === 'wedge' ||
       activeTool === 'dash'
     ) {
-      const id1 = getNextAtomId(activeElement, atoms);
-      if (atoms.length === 0) {
-        const a1: AtomNode = {
-          id: id1,
-          element: activeElement,
-          x2d: Number((x - 0.6).toFixed(2)),
-          y2d: y,
-          x3d: Number((x - 0.6).toFixed(2)),
-          y3d: -y,
-          z3d: 0,
-        };
-        const id2 = getNextAtomId(activeElement, [...atoms, a1]);
-        const a2: AtomNode = {
-          id: id2,
-          element: activeElement,
-          x2d: Number((x + 0.6).toFixed(2)),
-          y2d: y,
-          x3d: Number((x + 0.6).toFixed(2)),
-          y3d: -y,
-          z3d: 0,
-        };
-        const order: 1 | 2 | 3 = activeTool === 'bond_2' ? 2 : activeTool === 'bond_3' ? 3 : 1;
-        const stereo = activeTool === 'wedge' ? 'wedge' : activeTool === 'dash' ? 'dash' : 'none';
-        commitGraphChange([a1, a2], [
-          { id: `b_${Date.now()}`, source: a1.id, target: a2.id, order, stereo },
-        ]);
-      } else {
-        let nearest: AtomNode | null = null;
-        let minDist = Infinity;
-        for (const a of atoms) {
-          const d = Math.hypot(a.x2d - x, a.y2d - y);
-          if (d < minDist) {
-            minDist = d;
-            nearest = a;
-          }
-        }
-        const newAtom: AtomNode = {
-          id: id1,
-          element: activeElement,
-          x2d: x,
-          y2d: y,
-          x3d: x,
-          y3d: -y,
-          z3d: activeTool === 'wedge' ? 0.6 : activeTool === 'dash' ? -0.6 : 0,
-        };
-        if (nearest && minDist < 2.4) {
-          const order: 1 | 2 | 3 = activeTool === 'bond_2' ? 2 : activeTool === 'bond_3' ? 3 : 1;
-          const stereo = activeTool === 'wedge' ? 'wedge' : activeTool === 'dash' ? 'dash' : 'none';
-          commitGraphChange(
-            [...atoms, newAtom],
-            [
-              ...bonds,
-              {
-                id: `b_${Date.now()}`,
-                source: nearest.id,
-                target: newAtom.id,
-                order,
-                stereo,
-              },
-            ]
-          );
-        } else {
-          commitGraphChange([...atoms, newAtom], bonds);
-        }
-      }
+      const carbonEl: ElementSymbol = 'C';
+      const newId = getNextAtomId(carbonEl, atoms);
+      const newCarbonAtom: AtomNode = {
+        id: newId,
+        element: carbonEl,
+        x2d: x,
+        y2d: y,
+        x3d: x,
+        y3d: -y,
+        z3d: activeTool === 'wedge' ? 0.6 : activeTool === 'dash' ? -0.6 : 0,
+      };
+
+      // Second click is on empty canvas (not an atom): only add a Carbon atom
+      setSelectedAtomId(null);
+      commitGraphChange([...atoms, newCarbonAtom], bonds);
     }
   };
 
@@ -347,6 +319,7 @@ export const ChemicalSketcher2D: React.FC<ChemicalSketcher2DProps> = ({
     if (activeTool === 'erase') {
       const nextAtoms = atoms.filter((a) => a.id !== atom.id);
       const nextBonds = bonds.filter((b) => b.source !== atom.id && b.target !== atom.id);
+      if (selectedAtomId === atom.id) setSelectedAtomId(null);
       commitGraphChange(nextAtoms, nextBonds);
       return;
     }
@@ -368,6 +341,54 @@ export const ChemicalSketcher2D: React.FC<ChemicalSketcher2DProps> = ({
       activeTool === 'wedge' ||
       activeTool === 'dash'
     ) {
+      // First click: select the first atom
+      if (!selectedAtomId) {
+        setSelectedAtomId(atom.id);
+        return;
+      }
+
+      const sourceAtom = atoms.find((a) => a.id === selectedAtomId);
+      if (!sourceAtom) {
+        setSelectedAtomId(atom.id);
+        return;
+      }
+
+      const order: 1 | 2 | 3 =
+        activeTool === 'bond_2' ? 2 : activeTool === 'bond_3' ? 3 : 1;
+      const stereo: BondEdge['stereo'] =
+        activeTool === 'wedge' ? 'wedge' : activeTool === 'dash' ? 'dash' : 'none';
+
+      // Second click is another atom: add or update bond between the 2 selected atoms
+      if (atom.id !== sourceAtom.id) {
+        const existingBond = bonds.find(
+          (b) =>
+            (b.source === sourceAtom.id && b.target === atom.id) ||
+            (b.source === atom.id && b.target === sourceAtom.id)
+        );
+
+        if (existingBond) {
+          const updatedBonds = bonds.map((b) =>
+            b.id === existingBond.id
+              ? { ...b, source: sourceAtom.id, target: atom.id, order, stereo }
+              : b
+          );
+          setSelectedAtomId(null);
+          commitGraphChange(atoms, updatedBonds);
+        } else {
+          const newBond: BondEdge = {
+            id: `b_${Date.now()}`,
+            source: sourceAtom.id,
+            target: atom.id,
+            order,
+            stereo,
+          };
+          setSelectedAtomId(null);
+          commitGraphChange(atoms, [...bonds, newBond]);
+        }
+        return;
+      }
+
+      // Second click is the same atom (no other atom selected): only add a Carbon atom nearby
       const connected = bonds.filter((b) => b.source === atom.id || b.target === atom.id);
       let angle = -Math.PI / 6;
       if (connected.length === 1) {
@@ -381,40 +402,28 @@ export const ChemicalSketcher2D: React.FC<ChemicalSketcher2DProps> = ({
         angle = -Math.PI / 2 + connected.length * 1.1;
       }
 
-      const bondLen = activeElement === 'H' ? 0.95 : 1.25;
+      const bondLen = 1.25;
       const nx = Number((atom.x2d + Math.cos(angle) * bondLen).toFixed(2));
       const ny = Number((atom.y2d + Math.sin(angle) * bondLen).toFixed(2));
-      const newId = getNextAtomId(activeElement, atoms);
+      const newId = getNextAtomId('C', atoms);
       const newAtom: AtomNode = {
         id: newId,
-        element: activeElement,
+        element: 'C',
         x2d: nx,
         y2d: ny,
         x3d: nx,
         y3d: -ny,
         z3d: activeTool === 'wedge' ? 0.65 : activeTool === 'dash' ? -0.65 : 0,
       };
-      const order: 1 | 2 | 3 = activeTool === 'bond_2' ? 2 : activeTool === 'bond_3' ? 3 : 1;
-      const stereo = activeTool === 'wedge' ? 'wedge' : activeTool === 'dash' ? 'dash' : 'none';
 
-      commitGraphChange(
-        [...atoms, newAtom],
-        [
-          ...bonds,
-          {
-            id: `b_${Date.now()}`,
-            source: atom.id,
-            target: newAtom.id,
-            order,
-            stereo,
-          },
-        ]
-      );
+      setSelectedAtomId(null);
+      commitGraphChange([...atoms, newAtom], bonds);
     }
   };
 
   const handleBondClick = (e: React.MouseEvent, bond: BondEdge) => {
     e.stopPropagation();
+    setSelectedAtomId(null);
     if (activeTool === 'erase') {
       commitGraphChange(
         atoms,
@@ -446,8 +455,10 @@ export const ChemicalSketcher2D: React.FC<ChemicalSketcher2DProps> = ({
   };
 
   const handleMouseMove = (e: React.MouseEvent<SVGSVGElement>) => {
+    const coords = getSvgCoords(e);
+    setCursorChemPos(coords);
     if (!draggingAtomId) return;
-    const { x, y } = getSvgCoords(e);
+    const { x, y } = coords;
     const updated = atoms.map((a) =>
       a.id === draggingAtomId
         ? { ...a, x2d: x, y2d: y, x3d: x, y3d: -y }
@@ -1061,11 +1072,53 @@ export const ChemicalSketcher2D: React.FC<ChemicalSketcher2DProps> = ({
             );
           })}
 
+          {/* Interactive Preview Line when an Atom is Selected in Bond Mode */}
+          {selectedAtomId &&
+            (activeTool === 'bond_1' ||
+              activeTool === 'bond_2' ||
+              activeTool === 'bond_3' ||
+              activeTool === 'wedge' ||
+              activeTool === 'dash') &&
+            (() => {
+              const srcAtom = atoms.find((a) => a.id === selectedAtomId);
+              if (!srcAtom) return null;
+              const targetAtom =
+                hoveredAtomId && hoveredAtomId !== selectedAtomId
+                  ? atoms.find((a) => a.id === hoveredAtomId)
+                  : null;
+              const tx = targetAtom
+                ? toScreenX(targetAtom.x2d)
+                : cursorChemPos
+                  ? toScreenX(cursorChemPos.x)
+                  : null;
+              const ty = targetAtom
+                ? toScreenY(targetAtom.y2d)
+                : cursorChemPos
+                  ? toScreenY(cursorChemPos.y)
+                  : null;
+              if (tx === null || ty === null) return null;
+              const sx = toScreenX(srcAtom.x2d);
+              const sy = toScreenY(srcAtom.y2d);
+              return (
+                <line
+                  x1={sx}
+                  y1={sy}
+                  x2={tx}
+                  y2={ty}
+                  stroke={targetAtom ? '#2563EB' : '#94A3B8'}
+                  strokeWidth={targetAtom ? 2.4 : 1.6}
+                  strokeDasharray="4 3"
+                  className="pointer-events-none"
+                />
+              );
+            })()}
+
           {/* Render Atoms */}
           {atoms.map((atom) => {
             const cx = toScreenX(atom.x2d);
             const cy = toScreenY(atom.y2d);
             const isHovered = hoveredAtomId === atom.id;
+            const isSelected = selectedAtomId === atom.id;
             const elemColor = getReadableAtomColor(atom.element);
             const chg = atom.formalCharge ?? 0;
             const chgLabel =
@@ -1094,17 +1147,28 @@ export const ChemicalSketcher2D: React.FC<ChemicalSketcher2DProps> = ({
                 }}
                 onClick={(e) => handleAtomClick(e, atom)}
               >
+                {isSelected && (
+                  <circle
+                    r={atomRadius + 4}
+                    fill="none"
+                    stroke="#2563EB"
+                    strokeWidth="1.8"
+                    strokeDasharray="3 2"
+                  />
+                )}
                 <circle
                   r={atomRadius}
-                  fill="#FFFFFF"
+                  fill={isSelected ? '#EFF6FF' : '#FFFFFF'}
                   stroke={
-                    isHovered
-                      ? activeTool === 'erase'
-                        ? '#DC2626'
-                        : '#2563EB'
-                      : '#CBD5E1'
+                    isSelected
+                      ? '#2563EB'
+                      : isHovered
+                        ? activeTool === 'erase'
+                          ? '#DC2626'
+                          : '#2563EB'
+                        : '#CBD5E1'
                   }
-                  strokeWidth={isHovered ? 2.0 : isCompactMacroView ? 1.0 : 1.4}
+                  strokeWidth={isSelected || isHovered ? 2.2 : isCompactMacroView ? 1.0 : 1.4}
                 />
                 <text
                   textAnchor="middle"
@@ -1127,11 +1191,11 @@ export const ChemicalSketcher2D: React.FC<ChemicalSketcher2DProps> = ({
                     {chgLabel}
                   </text>
                 )}
-                {(!isCompactMacroView || isHovered) && (
+                {(!isCompactMacroView || isHovered || isSelected) && (
                   <text
                     y={atomRadius + 8}
                     textAnchor="middle"
-                    fill="#94A3B8"
+                    fill={isSelected ? '#2563EB' : '#94A3B8'}
                     className="font-mono text-[9px] select-none"
                   >
                     {atom.id}
@@ -1195,6 +1259,14 @@ export const ChemicalSketcher2D: React.FC<ChemicalSketcher2DProps> = ({
             <span>
               Bonds: <strong className="text-slate-900 tabular-nums">{bonds.length}</strong>
             </span>
+            {selectedAtomId && (
+              <>
+                <span aria-hidden="true">·</span>
+                <span className="text-blue-700 font-semibold">
+                  Selected: {selectedAtomId} (click 2nd atom to bond, or canvas to add C)
+                </span>
+              </>
+            )}
             {currentSmiles && (
               <>
                 <span aria-hidden="true">·</span>

@@ -118,6 +118,8 @@ export const PubChemSketcherModal: React.FC<PubChemSketcherModalProps> = ({
 
   // Canvas interaction state
   const [draggingAtomId, setDraggingAtomId] = useState<string | null>(null);
+  const [selectedAtomId, setSelectedAtomId] = useState<string | null>(null);
+  const [cursorChemPos, setCursorChemPos] = useState<{ x: number; y: number } | null>(null);
   const [draggingCanvas, setDraggingCanvas] = useState<{ startX: number; startY: number } | null>(null);
   const [hoveredAtomId, setHoveredAtomId] = useState<string | null>(null);
   const [hoveredBondId, setHoveredBondId] = useState<string | null>(null);
@@ -131,10 +133,21 @@ export const PubChemSketcherModal: React.FC<PubChemSketcherModalProps> = ({
       setDraftAtoms(clonedAtoms);
       setDraftBonds(clonedBonds);
       setHistory([]);
+      setSelectedAtomId(null);
       setShowExportPanel(false);
       setShowHelpBanner(false);
     }
   }, [isOpen, initialAtoms, initialBonds]);
+
+  useEffect(() => {
+    setSelectedAtomId(null);
+  }, [activeTool]);
+
+  useEffect(() => {
+    if (selectedAtomId && !draftAtoms.some((a) => a.id === selectedAtomId)) {
+      setSelectedAtomId(null);
+    }
+  }, [draftAtoms, selectedAtomId]);
 
   // Keep top text box synchronized with current graph & format selection
   useEffect(() => {
@@ -675,74 +688,19 @@ export const PubChemSketcherModal: React.FC<PubChemSketcherModalProps> = ({
 
     const bondSpec = getBondSpecFromTool(activeTool);
     if (bondSpec) {
-      if (draftAtoms.length === 0) {
-        const id1 = getNextAtomId(activeElement, draftAtoms);
-        const a1: AtomNode = {
-          id: id1,
-          element: activeElement,
-          x2d: Number((x - 0.62).toFixed(2)),
-          y2d: y,
-          x3d: Number((x - 0.62).toFixed(2)),
-          y3d: -y,
-          z3d: 0,
-        };
-        const id2 = getNextAtomId(activeElement, [a1]);
-        const a2: AtomNode = {
-          id: id2,
-          element: activeElement,
-          x2d: Number((x + 0.62).toFixed(2)),
-          y2d: y,
-          x3d: Number((x + 0.62).toFixed(2)),
-          y3d: -y,
-          z3d: bondSpec.stereo === 'wedge' ? 0.65 : bondSpec.stereo === 'dash' ? -0.65 : 0,
-        };
-        pushState([a1, a2], [
-          {
-            id: `b_pc_${Date.now()}`,
-            source: a1.id,
-            target: a2.id,
-            order: bondSpec.order,
-            stereo: bondSpec.stereo,
-          },
-        ]);
-      } else {
-        let nearest: AtomNode | null = null;
-        let minDist = Infinity;
-        for (const a of draftAtoms) {
-          const d = Math.hypot(a.x2d - x, a.y2d - y);
-          if (d < minDist) {
-            minDist = d;
-            nearest = a;
-          }
-        }
-        const id1 = getNextAtomId(activeElement, draftAtoms);
-        const newAtom: AtomNode = {
-          id: id1,
-          element: activeElement,
-          x2d: x,
-          y2d: y,
-          x3d: x,
-          y3d: -y,
-          z3d: bondSpec.stereo === 'wedge' ? 0.65 : bondSpec.stereo === 'dash' ? -0.65 : 0,
-        };
-        if (nearest && minDist < 2.5) {
-          pushState(
-            [...draftAtoms, newAtom],
-            [
-              ...draftBonds,
-              {
-                id: `b_pc_${Date.now()}`,
-                source: nearest.id,
-                target: newAtom.id,
-                order: bondSpec.order,
-                stereo: bondSpec.stereo,
-              },
-            ]
-          );
-        } else {
-          pushState([...draftAtoms, newAtom], draftBonds);
-        }
-      }
+      const carbonEl: ElementSymbol = 'C';
+      const id1 = getNextAtomId(carbonEl, draftAtoms);
+      const newCarbonAtom: AtomNode = {
+        id: id1,
+        element: carbonEl,
+        x2d: x,
+        y2d: y,
+        x3d: x,
+        y3d: -y,
+        z3d: bondSpec.stereo === 'wedge' ? 0.65 : bondSpec.stereo === 'dash' ? -0.65 : 0,
+      };
+      setSelectedAtomId(null);
+      pushState([...draftAtoms, newCarbonAtom], draftBonds);
     }
   };
 
@@ -750,6 +708,7 @@ export const PubChemSketcherModal: React.FC<PubChemSketcherModalProps> = ({
     e.stopPropagation();
 
     if (activeTool === 'erase') {
+      if (selectedAtomId === atom.id) setSelectedAtomId(null);
       pushState(
         draftAtoms.filter((a) => a.id !== atom.id),
         draftBonds.filter((b) => b.source !== atom.id && b.target !== atom.id)
@@ -806,6 +765,55 @@ export const PubChemSketcherModal: React.FC<PubChemSketcherModalProps> = ({
 
     const bondSpec = getBondSpecFromTool(activeTool);
     if (bondSpec) {
+      // First click: select the first atom
+      if (!selectedAtomId) {
+        setSelectedAtomId(atom.id);
+        return;
+      }
+
+      const sourceAtom = draftAtoms.find((a) => a.id === selectedAtomId);
+      if (!sourceAtom) {
+        setSelectedAtomId(atom.id);
+        return;
+      }
+
+      // Second click is another atom: add or update bond between the 2 selected atoms
+      if (atom.id !== sourceAtom.id) {
+        const existingBond = draftBonds.find(
+          (b) =>
+            (b.source === sourceAtom.id && b.target === atom.id) ||
+            (b.source === atom.id && b.target === sourceAtom.id)
+        );
+
+        if (existingBond) {
+          const updatedBonds = draftBonds.map((b) =>
+            b.id === existingBond.id
+              ? {
+                  ...b,
+                  source: sourceAtom.id,
+                  target: atom.id,
+                  order: bondSpec.order,
+                  stereo: bondSpec.stereo,
+                }
+              : b
+          );
+          setSelectedAtomId(null);
+          pushState(draftAtoms, updatedBonds);
+        } else {
+          const newBond: BondEdge = {
+            id: `b_pc_${Date.now()}`,
+            source: sourceAtom.id,
+            target: atom.id,
+            order: bondSpec.order,
+            stereo: bondSpec.stereo,
+          };
+          setSelectedAtomId(null);
+          pushState(draftAtoms, [...draftBonds, newBond]);
+        }
+        return;
+      }
+
+      // Second click is the same atom (no other atom selected): only add a Carbon atom nearby
       const connected = draftBonds.filter((b) => b.source === atom.id || b.target === atom.id);
       let angle = -Math.PI / 6;
       if (connected.length === 1) {
@@ -817,37 +825,27 @@ export const PubChemSketcherModal: React.FC<PubChemSketcherModalProps> = ({
       } else if (connected.length >= 2) {
         angle = -Math.PI / 2 + connected.length * 1.15;
       }
-      const dist = activeElement === 'H' ? 0.98 : 1.25;
+      const dist = 1.25;
       const nx = Number((atom.x2d + Math.cos(angle) * dist).toFixed(2));
       const ny = Number((atom.y2d + Math.sin(angle) * dist).toFixed(2));
-      const newId = getNextAtomId(activeElement, draftAtoms);
+      const newId = getNextAtomId('C', draftAtoms);
       const newAtom: AtomNode = {
         id: newId,
-        element: activeElement,
+        element: 'C',
         x2d: nx,
         y2d: ny,
         x3d: nx,
         y3d: -ny,
         z3d: bondSpec.stereo === 'wedge' ? 0.65 : bondSpec.stereo === 'dash' ? -0.65 : 0,
       };
-      pushState(
-        [...draftAtoms, newAtom],
-        [
-          ...draftBonds,
-          {
-            id: `b_pc_${Date.now()}`,
-            source: atom.id,
-            target: newAtom.id,
-            order: bondSpec.order,
-            stereo: bondSpec.stereo,
-          },
-        ]
-      );
+      setSelectedAtomId(null);
+      pushState([...draftAtoms, newAtom], draftBonds);
     }
   };
 
   const handleBondClick = (e: React.MouseEvent, bond: BondEdge) => {
     e.stopPropagation();
+    setSelectedAtomId(null);
     if (activeTool === 'erase') {
       pushState(
         draftAtoms,
@@ -868,15 +866,17 @@ export const PubChemSketcherModal: React.FC<PubChemSketcherModalProps> = ({
   };
 
   const handleMouseMove = (e: React.MouseEvent<SVGSVGElement>) => {
+    const coords = getSvgCoords(e);
+    setCursorChemPos(coords);
     if (draggingAtomId) {
-      const { x, y } = getSvgCoords(e);
+      const { x, y } = coords;
       setDraftAtoms((prev) =>
         prev.map((a) =>
           a.id === draggingAtomId ? { ...a, x2d: x, y2d: y, x3d: x, y3d: -y } : a
         )
       );
     } else if (draggingCanvas) {
-      const { x, y } = getSvgCoords(e);
+      const { x, y } = coords;
       const dx = Number((x - draggingCanvas.startX).toFixed(2));
       const dy = Number((y - draggingCanvas.startY).toFixed(2));
       if (Math.abs(dx) > 0.05 || Math.abs(dy) > 0.05) {
@@ -1963,11 +1963,49 @@ export const PubChemSketcherModal: React.FC<PubChemSketcherModalProps> = ({
                     );
                   })}
 
+                  {/* Interactive Preview Line when an Atom is Selected in Bond Mode */}
+                  {selectedAtomId &&
+                    getBondSpecFromTool(activeTool) !== null &&
+                    (() => {
+                      const srcAtom = draftAtoms.find((a) => a.id === selectedAtomId);
+                      if (!srcAtom) return null;
+                      const targetAtom =
+                        hoveredAtomId && hoveredAtomId !== selectedAtomId
+                          ? draftAtoms.find((a) => a.id === hoveredAtomId)
+                          : null;
+                      const tx = targetAtom
+                        ? toScreenX(targetAtom.x2d)
+                        : cursorChemPos
+                          ? toScreenX(cursorChemPos.x)
+                          : null;
+                      const ty = targetAtom
+                        ? toScreenY(targetAtom.y2d)
+                        : cursorChemPos
+                          ? toScreenY(cursorChemPos.y)
+                          : null;
+                      if (tx === null || ty === null) return null;
+                      const sx = toScreenX(srcAtom.x2d);
+                      const sy = toScreenY(srcAtom.y2d);
+                      return (
+                        <line
+                          x1={sx}
+                          y1={sy}
+                          x2={tx}
+                          y2={ty}
+                          stroke={targetAtom ? '#2563EB' : '#94A3B8'}
+                          strokeWidth={targetAtom ? 2.4 : 1.6}
+                          strokeDasharray="4 3"
+                          className="pointer-events-none"
+                        />
+                      );
+                    })()}
+
                   {/* Render Atoms */}
                   {draftAtoms.map((atom) => {
                     const cx = toScreenX(atom.x2d);
                     const cy = toScreenY(atom.y2d);
                     const isHovered = hoveredAtomId === atom.id;
+                    const isSelected = selectedAtomId === atom.id;
                     const color = getReadableAtomColor(atom.element);
                     const chg = atom.formalCharge ?? 0;
                     const chgLabel =
@@ -1988,17 +2026,28 @@ export const PubChemSketcherModal: React.FC<PubChemSketcherModalProps> = ({
                         }}
                         onClick={(e) => handleAtomClick(e, atom)}
                       >
+                        {isSelected && (
+                          <circle
+                            r={18}
+                            fill="none"
+                            stroke="#2563EB"
+                            strokeWidth="1.8"
+                            strokeDasharray="3 2"
+                          />
+                        )}
                         <circle
                           r={14}
-                          fill="#FFFFFF"
+                          fill={isSelected ? '#EFF6FF' : '#FFFFFF'}
                           stroke={
-                            isHovered
-                              ? activeTool === 'erase'
-                                ? '#DC2626'
-                                : '#2563EB'
-                              : '#CBD5E1'
+                            isSelected
+                              ? '#2563EB'
+                              : isHovered
+                                ? activeTool === 'erase'
+                                  ? '#DC2626'
+                                  : '#2563EB'
+                                : '#CBD5E1'
                           }
-                          strokeWidth={isHovered ? 2.0 : 1.2}
+                          strokeWidth={isSelected || isHovered ? 2.2 : 1.2}
                         />
                         <text
                           textAnchor="middle"
@@ -2052,7 +2101,7 @@ export const PubChemSketcherModal: React.FC<PubChemSketcherModalProps> = ({
                 {showHelpBanner && (
                   <div className="px-3 py-2 bg-amber-50 border-t border-amber-200 text-[11px] text-slate-700 flex items-center justify-between">
                     <span>
-                      Select any bond, ring, chain, functional group, or Periodic Table element on the left, then click the canvas or an existing atom to attach it.
+                      In Single/Double/Triple bond mode, click two atoms sequentially to bond them (or click an atom then empty space to place a standalone Carbon). Select any ring, chain, functional group, or Periodic Table element on the left to stamp or replace atoms.
                     </span>
                     <button
                       type="button"

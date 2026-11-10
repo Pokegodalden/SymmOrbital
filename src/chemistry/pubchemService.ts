@@ -1,4 +1,5 @@
 import { AtomNode, BondEdge, ELEMENT_PROPERTIES, ElementSymbol } from './moleculesData';
+import { resolveCoordinationBonds } from './moEngine';
 
 export async function fetchWithRetry(
   url: string,
@@ -125,6 +126,22 @@ const AMBIGUOUS_FORMULA_QUERY_MAP: Record<string, string> = {
   xef4: 'xenon tetrafluoride',
   xef6: 'xenon hexafluoride',
   xeof4: 'xenon oxytetrafluoride',
+  'hexacyanoferrate(ii)': 'hexacyanoferrate',
+  'hexacyanoferrate(iii)': 'ferricyanide',
+  '[fe(cn)6]4-': 'hexacyanoferrate',
+  '[fe(cn)6]3-': 'ferricyanide',
+  'fe(cn)6': 'hexacyanoferrate',
+  'cr(co)6': 'chromium hexacarbonyl',
+  'fe(co)5': 'iron pentacarbonyl',
+  'ni(co)4': 'nickel tetracarbonyl',
+  '[ni(cn)4]2-': 'tetracyanonickelate',
+  'ni(cn)4': 'tetracyanonickelate',
+  '[ptcl6]2-': 'hexachloroplatinate',
+  'ptcl6': 'hexachloroplatinate',
+  '[ptcl4]2-': 'tetrachloroplatinate',
+  'ptcl4': 'tetrachloroplatinate',
+  'hexaamminecobalt(iii)': 'hexaamminecobalt(3+)',
+  '[co(nh3)6]3+': 'hexaamminecobalt(3+)',
 };
 
 /**
@@ -240,20 +257,26 @@ export function parseSdfToGraph(
     }
   }
 
+  // Reconstruct missing metal-ligand coordinate covalent bonds (e.g. Fe-C in hexacyanoferrate [Fe(CN)6]4-,
+  // Cr-C in Cr(CO)6, Fe-C in Fe(CO)5, Ni-C in [Ni(CN)4]2-, Pt-Cl in [PtCl6]2-) and strip spectator alkali counterions
+  const coordResolved = resolveCoordinationBonds(rawAtoms, rawBonds, true);
+  const resolvedAtoms = coordResolved.atoms;
+  const resolvedBonds = coordResolved.bonds;
+
   const meanBondLengthAngstrom =
     bondLengthCount > 0 ? Number((bondLengthSum / bondLengthCount).toFixed(3)) : undefined;
 
   // For large molecules (> 24 atoms), strip explicit C-H hydrogens (which are handled by skeletal implicit-H rules)
   // while preserving up to 60 heavy atoms and any explicit heteroatom hydrogens (O-H, N-H, S-H, P-H).
-  if (rawAtoms.length > 24) {
-    const heavyAtoms = rawAtoms.filter((a) => a.element !== 'H').slice(0, 60);
+  if (resolvedAtoms.length > 24) {
+    const heavyAtoms = resolvedAtoms.filter((a) => a.element !== 'H').slice(0, 60);
     const heavyIds = new Set(heavyAtoms.map((a) => a.id));
     const heteroIds = new Set(
       heavyAtoms.filter((a) => a.element !== 'C').map((a) => a.id)
     );
-    const heteroHydrogens = rawAtoms.filter((a) => {
+    const heteroHydrogens = resolvedAtoms.filter((a) => {
       if (a.element !== 'H') return false;
-      return rawBonds.some(
+      return resolvedBonds.some(
         (b) =>
           (b.source === a.id && heteroIds.has(b.target)) ||
           (b.target === a.id && heteroIds.has(b.source))
@@ -261,7 +284,7 @@ export function parseSdfToGraph(
     });
     const keptAtoms = [...heavyAtoms, ...heteroHydrogens];
     const keepIds = new Set(keptAtoms.map((a) => a.id));
-    const filteredBonds = rawBonds.filter(
+    const filteredBonds = resolvedBonds.filter(
       (b) =>
         keepIds.has(b.source) &&
         keepIds.has(b.target) &&
@@ -270,7 +293,7 @@ export function parseSdfToGraph(
     return { atoms: keptAtoms, bonds: filteredBonds, meanBondLengthAngstrom };
   }
 
-  return { atoms: rawAtoms, bonds: rawBonds, meanBondLengthAngstrom };
+  return { atoms: resolvedAtoms, bonds: resolvedBonds, meanBondLengthAngstrom };
 }
 
 /**
