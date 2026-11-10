@@ -668,7 +668,7 @@ export const OrbitalVisualizer3D: React.FC<OrbitalVisualizer3DProps> = ({
           opacity: opacityVal,
           wireframe: mode === 'wireframe',
           depthWrite: false,
-          side: mode === 'wireframe' || mode === 'lobes' ? THREE.DoubleSide : THREE.FrontSide,
+          side: THREE.DoubleSide,
         });
 
         const negMat = new THREE.MeshPhysicalMaterial({
@@ -682,7 +682,7 @@ export const OrbitalVisualizer3D: React.FC<OrbitalVisualizer3DProps> = ({
           opacity: opacityVal,
           wireframe: mode === 'wireframe',
           depthWrite: false,
-          side: mode === 'wireframe' || mode === 'lobes' ? THREE.DoubleSide : THREE.FrontSide,
+          side: THREE.DoubleSide,
         });
 
         if (mode === 'merged' || mode === 'wireframe') {
@@ -756,25 +756,113 @@ export const OrbitalVisualizer3D: React.FC<OrbitalVisualizer3DProps> = ({
               negLobe.scale.setScalar(0.95 * weight);
               negLobe.renderOrder = 2;
               orbitalGroup.add(negLobe);
-            } else if (term.orbital === 'dz2') {
-              const posLobe = new THREE.Mesh(lobeGeo, primaryMat);
-              posLobe.position.copy(atomOrigin);
-              posLobe.scale.setScalar(1.05 * weight);
-              orbitalGroup.add(posLobe);
+            } else {
+              const addDirectedLobe = (
+                dx: number,
+                dy: number,
+                dz: number,
+                mat: THREE.Material,
+                scaleFactor = 0.86
+              ) => {
+                const lobe = new THREE.Mesh(lobeGeo, mat);
+                lobe.position.copy(atomOrigin);
+                const dir = new THREE.Vector3(dx, dy, dz).normalize();
+                lobe.quaternion.setFromUnitVectors(vUp, dir);
+                lobe.scale.setScalar(scaleFactor * weight);
+                lobe.renderOrder = 2;
+                orbitalGroup.add(lobe);
+              };
 
-              const posLobe2 = new THREE.Mesh(lobeGeo, primaryMat);
-              posLobe2.position.copy(atomOrigin);
-              posLobe2.rotation.x = Math.PI;
-              posLobe2.scale.setScalar(1.05 * weight);
-              orbitalGroup.add(posLobe2);
-
-              const torusBelly = new THREE.Mesh(
-                new THREE.TorusGeometry(0.55 * weight, 0.2 * weight, 14, 28),
-                oppositeMat
-              );
-              torusBelly.position.copy(atomOrigin);
-              torusBelly.rotation.x = Math.PI / 2;
-              orbitalGroup.add(torusBelly);
+              if (term.orbital === 'dz2') {
+                addDirectedLobe(0, 0, 1, primaryMat, 1.02);
+                addDirectedLobe(0, 0, -1, primaryMat, 1.02);
+                const torusBelly = new THREE.Mesh(
+                  new THREE.TorusGeometry(0.55 * weight, 0.19 * weight, 14, 28),
+                  oppositeMat
+                );
+                torusBelly.position.copy(atomOrigin);
+                torusBelly.renderOrder = 2;
+                orbitalGroup.add(torusBelly);
+              } else if (term.orbital === 'dx2y2') {
+                addDirectedLobe(1, 0, 0, primaryMat, 0.9);
+                addDirectedLobe(-1, 0, 0, primaryMat, 0.9);
+                addDirectedLobe(0, 1, 0, oppositeMat, 0.9);
+                addDirectedLobe(0, -1, 0, oppositeMat, 0.9);
+              } else if (term.orbital === 'dxy') {
+                addDirectedLobe(1, 1, 0, primaryMat, 0.9);
+                addDirectedLobe(-1, -1, 0, primaryMat, 0.9);
+                addDirectedLobe(1, -1, 0, oppositeMat, 0.9);
+                addDirectedLobe(-1, 1, 0, oppositeMat, 0.9);
+              } else if (term.orbital === 'dxz') {
+                addDirectedLobe(1, 0, 1, primaryMat, 0.9);
+                addDirectedLobe(-1, 0, -1, primaryMat, 0.9);
+                addDirectedLobe(1, 0, -1, oppositeMat, 0.9);
+                addDirectedLobe(-1, 0, 1, oppositeMat, 0.9);
+              } else if (term.orbital === 'dyz') {
+                addDirectedLobe(0, 1, 1, primaryMat, 0.9);
+                addDirectedLobe(0, -1, -1, primaryMat, 0.9);
+                addDirectedLobe(0, 1, -1, oppositeMat, 0.9);
+                addDirectedLobe(0, -1, 1, oppositeMat, 0.9);
+              } else if (term.orbital === 'fz3') {
+                addDirectedLobe(0, 0, 1, primaryMat, 1.04);
+                addDirectedLobe(0, 0, -1, oppositeMat, 1.04);
+                const collarGeo = new THREE.TorusGeometry(0.52 * weight, 0.15 * weight, 12, 26);
+                const topCollar = new THREE.Mesh(collarGeo, oppositeMat);
+                topCollar.position.copy(atomOrigin).add(new THREE.Vector3(0, 0, 0.34 * weight));
+                topCollar.renderOrder = 2;
+                orbitalGroup.add(topCollar);
+                const botCollar = new THREE.Mesh(collarGeo, primaryMat);
+                botCollar.position.copy(atomOrigin).add(new THREE.Vector3(0, 0, -0.34 * weight));
+                botCollar.renderOrder = 2;
+                orbitalGroup.add(botCollar);
+              } else if (term.orbital === 'fxyz') {
+                for (const sx of [-1, 1]) {
+                  for (const sy of [-1, 1]) {
+                    for (const sz of [-1, 1]) {
+                      addDirectedLobe(
+                        sx,
+                        sy,
+                        sz,
+                        sx * sy * sz > 0 ? primaryMat : oppositeMat,
+                        0.82
+                      );
+                    }
+                  }
+                }
+              } else if (term.orbital === 'fz_x2y2') {
+                for (const sz of [-1, 1]) {
+                  addDirectedLobe(1, 0, sz, sz > 0 ? primaryMat : oppositeMat, 0.82);
+                  addDirectedLobe(-1, 0, sz, sz > 0 ? primaryMat : oppositeMat, 0.82);
+                  addDirectedLobe(0, 1, sz, sz > 0 ? oppositeMat : primaryMat, 0.82);
+                  addDirectedLobe(0, -1, sz, sz > 0 ? oppositeMat : primaryMat, 0.82);
+                }
+              } else if (term.orbital === 'fx_x2_3y2' || term.orbital === 'fy_3x2_y2') {
+                const offset = term.orbital === 'fy_3x2_y2' ? Math.PI / 6 : 0;
+                for (let k = 0; k < 6; k++) {
+                  const phi = offset + (k * Math.PI) / 3;
+                  addDirectedLobe(
+                    Math.cos(phi),
+                    Math.sin(phi),
+                    0,
+                    k % 2 === 0 ? primaryMat : oppositeMat,
+                    0.84
+                  );
+                }
+              } else if (term.orbital === 'fxz2' || term.orbital === 'fyz2') {
+                const isX = term.orbital === 'fxz2';
+                for (let k = 0; k < 6; k++) {
+                  const theta = (k * Math.PI) / 3;
+                  const c = Math.cos(theta);
+                  const s = Math.sin(theta);
+                  addDirectedLobe(
+                    isX ? c : 0,
+                    isX ? 0 : c,
+                    s,
+                    k % 2 === 0 ? primaryMat : oppositeMat,
+                    0.84
+                  );
+                }
+              }
             }
           }
         } else {

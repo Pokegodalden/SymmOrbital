@@ -182,6 +182,19 @@ export function moLabelToLatex(label: string): string {
   const parenRaw = m[2]
     .replace(/HOMO/g, '\\mathrm{HOMO}')
     .replace(/LUMO/g, '\\mathrm{LUMO}')
+    .replace(/(\d)dz²|(\d)dz2/g, '$1d_{z^2}')
+    .replace(/(\d)dx²[−-]y²|(\d)dx2-y2/g, '$1$2d_{x^2-y^2}')
+    .replace(/(\d)dxy/g, '$1d_{xy}')
+    .replace(/(\d)dxz/g, '$1d_{xz}')
+    .replace(/(\d)dyz/g, '$1d_{yz}')
+    .replace(/(\d)fz³|(\d)fz3/g, '$1$2f_{z^3}')
+    .replace(/(\d)fxyz/g, '$1f_{xyz}')
+    .replace(/(\d)fz\(x²[−-]y²\)|(\d)fz\(x2-y2\)/g, '$1$2f_{z(x^2-y^2)}')
+    .replace(/(\d)fx\(x²[−-]3y²\)|(\d)fx\(x2-3y2\)/g, '$1$2f_{x(x^2-3y^2)}')
+    .replace(/(\d)fy\(3x²[−-]y²\)|(\d)fy\(3x2-y2\)/g, '$1$2f_{y(3x^2-y^2)}')
+    .replace(/σ_dz²/g, '\\sigma_{d_{z^2}}')
+    .replace(/σ_x²[−-]y²/g, '\\sigma_{x^2-y^2}')
+    .replace(/σ_4fz³/g, '\\sigma_{4f_{z^3}}')
     .replace(/σ\*_([A-Za-z0-9αβγ+]+)/g, '\\sigma^*_{\\mathrm{$1}}')
     .replace(/σ_([A-Za-z0-9αβγ+]+)/g, '\\sigma_{\\mathrm{$1}}')
     .replace(/π\*_([A-Za-z0-9αβγ+]+)/g, '\\pi^*_{\\mathrm{$1}}')
@@ -191,8 +204,10 @@ export function moLabelToLatex(label: string): string {
     .replace(/π(\d+)/g, '\\pi_{$1}')
     .replace(/π\*/g, '\\pi^*')
     .replace(/σ\*/g, '\\sigma^*')
+    .replace(/δ\*/g, '\\delta^*')
     .replace(/π/g, '\\pi')
     .replace(/σ/g, '\\sigma')
+    .replace(/δ/g, '\\delta')
     .replace(/α/g, '\\alpha ')
     .replace(/β/g, '\\beta ')
     .replace(/γ/g, '\\gamma ');
@@ -263,7 +278,7 @@ export function lcaoExpansionToLatex(moLabel: string, lcao: LCAOContribution[]):
 }
 
 /**
- * Converts an Atomic Orbital basis label (e.g. "O1 2pz", "C1 2pz(π)", "S 3dz²", "H1 1s")
+ * Converts an Atomic Orbital basis label (e.g. "O1 2pz", "C1 2pz(π)", "S 3dz²", "Ce1 4fxyz", "H1 1s")
  * into LaTeX notation.
  */
 export function aoLabelToLatex(aoLabel: string): string {
@@ -276,7 +291,17 @@ export function aoLabelToLatex(aoLabel: string): string {
     .replace(/(\d)p_?y/g, '$1p_y')
     .replace(/(\d)p_?σ/g, '$1p_\\sigma')
     .replace(/(\d)d_?z²|(\d)dz2/g, '$1$2d_{z^2}')
-    .replace(/(\d)dx²-y²|(\d)dx2y2/g, '$1$2d_{x^2-y^2}')
+    .replace(/(\d)dx²-y²|(\d)dx2-y2|(\d)dx2y2/g, '$1$2$3d_{x^2-y^2}')
+    .replace(/(\d)dxy/g, '$1d_{xy}')
+    .replace(/(\d)dxz/g, '$1d_{xz}')
+    .replace(/(\d)dyz/g, '$1d_{yz}')
+    .replace(/(\d)fz³|(\d)fz3/g, '$1$2f_{z^3}')
+    .replace(/(\d)fxz²|(\d)fxz2/g, '$1$2f_{xz^2}')
+    .replace(/(\d)fyz²|(\d)fyz2/g, '$1$2f_{yz^2}')
+    .replace(/(\d)fxyz/g, '$1f_{xyz}')
+    .replace(/(\d)fz\(x²-y²\)|(\d)fz\(x2-y2\)/g, '$1$2f_{z(x^2-y^2)}')
+    .replace(/(\d)fx\(x²-3y²\)|(\d)fx\(x2-3y2\)/g, '$1$2f_{x(x^2-3y^2)}')
+    .replace(/(\d)fy\(3x²-y²\)|(\d)fy\(3x2-y2\)/g, '$1$2f_{y(3x^2-y^2)}')
     .replace(/\(in-plane\)/g, '\\;(\\text{in-plane})')
     .replace(/\(out-of-plane\)/g, '\\;(\\text{out-of-plane})')
     .replace(/\(π\)/g, '(\\pi)')

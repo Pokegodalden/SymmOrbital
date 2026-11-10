@@ -412,8 +412,8 @@ export const POINT_GROUPS: Record<string, PointGroupData> = {
       { symbol: 'A1', id: 'A1', dimension: 1, characters: [1, 1, 1, 1, 1], linearFunctions: [], quadraticFunctions: ['x²+y²+z²'], orbitalBasis: 's', irActive: false, ramanActive: true, description: 'Totally symmetric spherical representation (2s orbital on C).' },
       { symbol: 'A2', id: 'A2', dimension: 1, characters: [1, 1, 1, -1, -1], linearFunctions: [], quadraticFunctions: [], orbitalBasis: 'fxyz', irActive: false, ramanActive: false, description: 'Antisymmetric under S4 and σd.' },
       { symbol: 'E', id: 'E', dimension: 2, characters: [2, -1, 2, 0, 0], linearFunctions: [], quadraticFunctions: ['(2z²-x²-y², x²-y²)'], orbitalBasis: '(dz², dx²-y²)', irActive: false, ramanActive: true, description: 'Doubly degenerate d-orbital pair pointing between tetrahedral ligands.' },
-      { symbol: 'T1', id: 'T1', dimension: 3, characters: [3, 0, -1, 1, -1], linearFunctions: ['(Rx, Ry, Rz)'], quadraticFunctions: [], orbitalBasis: '', irActive: false, ramanActive: false, description: 'Triply degenerate rotational representation.' },
-      { symbol: 'T2', id: 'T2', dimension: 3, characters: [3, 0, -1, -1, 1], linearFunctions: ['(x, y, z)'], quadraticFunctions: ['(xy, xz, yz)'], orbitalBasis: '(px, py, pz), (dxy, dxz, dyz)', irActive: true, ramanActive: true, description: 'Triply degenerate p and d orbitals (sp³ / sd³ tetrahedral bonding).' },
+      { symbol: 'T1', id: 'T1', dimension: 3, characters: [3, 0, -1, 1, -1], linearFunctions: ['(Rx, Ry, Rz)'], quadraticFunctions: [], orbitalBasis: '(fx(x²-3y²), fy(3x²-y²), fz(x²-y²))', irActive: false, ramanActive: false, description: 'Triply degenerate rotational and cubic f-orbital representation.' },
+      { symbol: 'T2', id: 'T2', dimension: 3, characters: [3, 0, -1, -1, 1], linearFunctions: ['(x, y, z)'], quadraticFunctions: ['(xy, xz, yz)'], orbitalBasis: '(px, py, pz), (dxy, dxz, dyz), (fxz², fyz², fz³)', irActive: true, ramanActive: true, description: 'Triply degenerate p, d, and axial f orbitals (sp³ / sd³ tetrahedral bonding).' },
     ],
     elements3D: [
       { id: 'c3_1', type: 'axis', label: 'C3 (Bond Axis)', schoenflies: 'C3', fold: 3, axis: [0.577, 0.577, 0.577], color: '#2563EB', description: '3-fold axis along a vertex of the tetrahedron' },
@@ -432,7 +432,7 @@ export const POINT_GROUPS: Record<string, PointGroupData> = {
     name: 'Octahedral',
     order: 48,
     family: 'Cubic / Polyhedral',
-    description: 'Full octahedral symmetry with inversion center i, three 4-fold C4 axes along the Cartesian x, y, z ligand axes, four 3-fold C3 axes through octahedral faces, and nine mirror planes (3 σh + 6 σd). Classic examples: SF6, [Fe(CN)6]4-, Mo(CO)6.',
+    description: 'Full octahedral symmetry with inversion center i, three 4-fold C4 axes along the Cartesian x, y, z ligand axes, four 3-fold C3 axes through octahedral faces, and nine mirror planes (3 σh + 6 σd). Classic examples: SF6, [CrCl6]3-, [CeCl6]3-, Mo(CO)6.',
     classes: [
       { id: 'E', symbol: 'E', operationType: 'E', count: 1, description: 'Identity operation' },
       { id: '8C3', symbol: '8C3', operationType: 'Cn', count: 8, description: '120° rotations through opposite triangular faces' },
@@ -449,8 +449,9 @@ export const POINT_GROUPS: Record<string, PointGroupData> = {
       { symbol: 'A1g', id: 'A1g', dimension: 1, characters: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1], linearFunctions: [], quadraticFunctions: ['x²+y²+z²'], orbitalBasis: 's', irActive: false, ramanActive: true, description: 'Totally symmetric spherical representation.' },
       { symbol: 'Eg', id: 'Eg', dimension: 2, characters: [2, -1, 0, 0, 2, 2, 0, -1, 2, 0], linearFunctions: [], quadraticFunctions: ['(2z²-x²-y², x²-y²)'], orbitalBasis: '(dz², dx²-y²)', irActive: false, ramanActive: true, description: 'Doubly degenerate axial d-orbitals pointing directly at the 6 octahedral ligands.' },
       { symbol: 'T2g', id: 'T2g', dimension: 3, characters: [3, 0, 1, -1, -1, 3, -1, 0, -1, 1], linearFunctions: [], quadraticFunctions: ['(xy, xz, yz)'], orbitalBasis: '(dxy, dxz, dyz)', irActive: false, ramanActive: true, description: 'Triply degenerate inter-axial d-orbitals (π symmetry in octahedra).' },
-      { symbol: 'T1u', id: 'T1u', dimension: 3, characters: [3, 0, -1, 1, -1, -3, -1, 0, 1, 1], linearFunctions: ['(x, y, z)'], quadraticFunctions: [], orbitalBasis: '(px, py, pz)', irActive: true, ramanActive: false, description: 'Triply degenerate ungerade p-orbitals along x, y, z axes.' },
-      { symbol: 'T2u', id: 'T2u', dimension: 3, characters: [3, 0, 1, -1, -1, -3, 1, 0, 1, -1], linearFunctions: [], quadraticFunctions: [], orbitalBasis: 'Non-bonding LGOs', irActive: false, ramanActive: false, description: 'Triply degenerate ungerade ligand group representation.' },
+      { symbol: 'A2u', id: 'A2u', dimension: 1, characters: [1, 1, -1, -1, 1, -1, 1, -1, -1, 1], linearFunctions: [], quadraticFunctions: [], orbitalBasis: 'fxyz', irActive: false, ramanActive: false, description: 'Cubic 8-lobed fxyz representation pointing into the eight octants between octahedral axes.' },
+      { symbol: 'T1u', id: 'T1u', dimension: 3, characters: [3, 0, -1, 1, -1, -3, -1, 0, 1, 1], linearFunctions: ['(x, y, z)'], quadraticFunctions: [], orbitalBasis: '(px, py, pz), (fxz², fyz², fz³)', irActive: true, ramanActive: false, description: 'Triply degenerate ungerade p and axial f orbitals along x, y, z axes.' },
+      { symbol: 'T2u', id: 'T2u', dimension: 3, characters: [3, 0, 1, -1, -1, -3, 1, 0, 1, -1], linearFunctions: [], quadraticFunctions: [], orbitalBasis: '(fz(x²-y²), fx(x²-3y²), fy(3x²-y²))', irActive: false, ramanActive: false, description: 'Triply degenerate ungerade cubic f-orbital and ligand group representation.' },
     ],
     elements3D: [
       { id: 'c4_z', type: 'axis', label: 'C4 (z-axis)', schoenflies: 'C4', fold: 4, axis: [0, 1, 0], color: '#2563EB', description: '4-fold rotation axis along trans S–F bonds' },
@@ -459,7 +460,9 @@ export const POINT_GROUPS: Record<string, PointGroupData> = {
       { id: 'inv', type: 'center', label: 'Inversion Center i', schoenflies: 'i', color: '#DC2626', description: 'Central sulfur atom inversion center' },
     ],
     defaultReduciblePresets: [
-      { id: 'sigma_6', label: 'Γ_σ (6 Octahedral S–F σ Bonds)', characters: [6, 0, 0, 2, 2, 0, 0, 0, 4, 2], description: 'Six octahedral σ bonds decompose into Γ_σ = A1g + Eg + T1u' },
+      { id: 'sigma_6', label: 'Γ_σ (6 Octahedral M–L σ Bonds)', characters: [6, 0, 0, 2, 2, 0, 0, 0, 4, 2], description: 'Six octahedral σ bonds decompose into Γ_σ = A1g + Eg + T1u' },
+      { id: 'gamma_d', label: 'Γ_d (5 Metal d Orbitals)', characters: [5, -1, 1, -1, 1, 5, -1, -1, 1, 1], description: 'Five central metal d orbitals split into Γ_d = Eg + T2g' },
+      { id: 'gamma_f', label: 'Γ_f (7 Lanthanide 4f Orbitals)', characters: [7, 1, -1, -1, -1, -7, 1, -1, 1, 1], description: 'Seven central lanthanide 4f orbitals split into Γ_f = A2u + T1u + T2u' },
     ],
   },
 

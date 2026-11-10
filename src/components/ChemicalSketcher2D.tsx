@@ -15,6 +15,7 @@ import {
   ChevronUp,
   Eraser,
   Hexagon,
+  Maximize2,
   MousePointer,
   PanelLeftClose,
   Redo2,
@@ -23,6 +24,10 @@ import {
   Square,
   Undo2,
 } from 'lucide-react';
+import {
+  PubChemSketcherModal,
+  getReadableAtomColor,
+} from './PubChemSketcherModal';
 
 export type SketchTool =
   | 'select'
@@ -66,6 +71,7 @@ export const ChemicalSketcher2D: React.FC<ChemicalSketcher2DProps> = ({
   const [activeTool, setActiveTool] = useState<SketchTool>('bond_1');
   const [activeElement, setActiveElement] = useState<ElementSymbol>('C');
   const [showHeaderOptions, setShowHeaderOptions] = useState<boolean>(false);
+  const [isFullSketcherOpen, setIsFullSketcherOpen] = useState<boolean>(false);
   const [draggingAtomId, setDraggingAtomId] = useState<string | null>(null);
   const [hoveredAtomId, setHoveredAtomId] = useState<string | null>(null);
   const [hoveredBondId, setHoveredBondId] = useState<string | null>(null);
@@ -789,7 +795,7 @@ export const ChemicalSketcher2D: React.FC<ChemicalSketcher2DProps> = ({
               })}
             </div>
 
-            <div className="flex items-center gap-1 text-[11px] flex-wrap">
+            <div className="flex items-center gap-1 text-[11px] flex-wrap ml-auto">
               <button
                 type="button"
                 onClick={() => applyTemplate('ozone')}
@@ -817,6 +823,16 @@ export const ChemicalSketcher2D: React.FC<ChemicalSketcher2DProps> = ({
                 className="px-1.5 py-0.5 text-[11px] font-medium text-slate-700 bg-white border border-slate-200 rounded hover:bg-slate-50 whitespace-nowrap shrink-0"
               >
                 HCN
+              </button>
+              <button
+                type="button"
+                onClick={() => setIsFullSketcherOpen(true)}
+                title="Open Full 2D Chemical Sketcher (Periodic Table, Rings, Functional Groups & Molfile)"
+                data-testid="open-full-sketcher-btn"
+                className="px-2 py-0.5 text-[11px] font-semibold text-white bg-blue-600 border border-blue-700 rounded hover:bg-blue-700 transition-colors flex items-center gap-1 whitespace-nowrap shrink-0 shadow-2xs"
+              >
+                <Maximize2 className="w-3 h-3" />
+                <span>Full 2D Sketcher</span>
               </button>
             </div>
           </div>
@@ -945,7 +961,49 @@ export const ChemicalSketcher2D: React.FC<ChemicalSketcher2DProps> = ({
                   />
                 )}
 
-                {bond.order === 2 && (
+                {bond.order === 1 && bond.stereo === 'wavy' && (
+                  <path
+                    d={(() => {
+                      const steps = 8;
+                      let d = `M ${x1} ${y1}`;
+                      for (let k = 1; k <= steps; k++) {
+                        const f = k / steps;
+                        const mx = x1 + dx * f + (k % 2 === 0 ? 1 : -1) * nx * 3.5;
+                        const my = y1 + dy * f + (k % 2 === 0 ? 1 : -1) * ny * 3.5;
+                        d += ` L ${mx.toFixed(1)} ${my.toFixed(1)}`;
+                      }
+                      return d;
+                    })()}
+                    fill="none"
+                    stroke={strokeColor}
+                    strokeWidth={2.0}
+                  />
+                )}
+
+                {bond.order === 2 && bond.stereo === 'crossed' && (
+                  <>
+                    <line
+                      x1={x1 + nx * 3.2}
+                      y1={y1 + ny * 3.2}
+                      x2={x2 - nx * 3.2}
+                      y2={y2 - ny * 3.2}
+                      stroke={strokeColor}
+                      strokeWidth={2.2}
+                      strokeLinecap="round"
+                    />
+                    <line
+                      x1={x1 - nx * 3.2}
+                      y1={y1 - ny * 3.2}
+                      x2={x2 + nx * 3.2}
+                      y2={y2 + ny * 3.2}
+                      stroke={strokeColor}
+                      strokeWidth={2.2}
+                      strokeLinecap="round"
+                    />
+                  </>
+                )}
+
+                {bond.order === 2 && bond.stereo !== 'crossed' && (
                   <>
                     <line
                       x1={x1 + nx * 3.2}
@@ -1008,24 +1066,10 @@ export const ChemicalSketcher2D: React.FC<ChemicalSketcher2DProps> = ({
             const cx = toScreenX(atom.x2d);
             const cy = toScreenY(atom.y2d);
             const isHovered = hoveredAtomId === atom.id;
-            const elemColor =
-              atom.element === 'O'
-                ? '#DC2626'
-                : atom.element === 'N'
-                  ? '#2563EB'
-                  : atom.element === 'F' || atom.element === 'Cl'
-                    ? '#059669'
-                    : atom.element === 'S'
-                      ? '#CA8A04'
-                      : atom.element === 'P'
-                        ? '#D97706'
-                        : atom.element === 'B'
-                          ? '#DB2777'
-                          : atom.element === 'Xe'
-                            ? '#0891B2'
-                            : atom.element === 'H'
-                              ? '#475569'
-                              : '#0F172A';
+            const elemColor = getReadableAtomColor(atom.element);
+            const chg = atom.formalCharge ?? 0;
+            const chgLabel =
+              chg > 0 ? (chg === 1 ? '+' : `${chg}+`) : chg < 0 ? (chg === -1 ? '−' : `${Math.abs(chg)}−`) : '';
 
             const atomRadius = isCompactMacroView
               ? atom.element === 'H'
@@ -1072,6 +1116,17 @@ export const ChemicalSketcher2D: React.FC<ChemicalSketcher2DProps> = ({
                 >
                   {atom.element}
                 </text>
+                {chgLabel && (
+                  <text
+                    x={atomRadius * 0.72}
+                    y={-atomRadius * 0.55}
+                    textAnchor="middle"
+                    fill={chg > 0 ? '#DC2626' : '#2563EB'}
+                    className="font-mono text-[10px] font-bold select-none"
+                  >
+                    {chgLabel}
+                  </text>
+                )}
                 {(!isCompactMacroView || isHovered) && (
                   <text
                     y={atomRadius + 8}
@@ -1189,6 +1244,18 @@ export const ChemicalSketcher2D: React.FC<ChemicalSketcher2DProps> = ({
           </button>
         </form>
       )}
+
+      {/* Full PubChem-style 2D Chemical Sketcher Modal */}
+      <PubChemSketcherModal
+        isOpen={isFullSketcherOpen}
+        initialAtoms={atoms}
+        initialBonds={bonds}
+        onAccept={(nextAtoms, nextBonds, customTitle) => {
+          commitGraphChange(nextAtoms, nextBonds, customTitle);
+          setIsFullSketcherOpen(false);
+        }}
+        onCancel={() => setIsFullSketcherOpen(false)}
+      />
     </div>
   );
 };

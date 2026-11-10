@@ -46,13 +46,17 @@ import {
   Table2,
 } from 'lucide-react';
 
-type PresetCategory = 'all' | 'hypervalent' | 'diatomics' | 'vsepr' | 'pi' | 'large';
+type PresetCategory = 'all' | 'complexes' | 'hypervalent' | 'diatomics' | 'vsepr' | 'pi' | 'large';
 type BottomDockTab = 'symmetry' | 'audit' | 'pubchem' | 'all';
 
 const PRESET_CATEGORIES: Record<PresetCategory, { label: string; formulas: string[] }> = {
   all: {
     label: `All Benchmarks (${CANONICAL_MOLECULES.length})`,
     formulas: CANONICAL_MOLECULES.map((m) => m.formula),
+  },
+  complexes: {
+    label: 'd & f Coordination Complexes',
+    formulas: ['TiCl4', 'PtCl4', 'CrCl6', 'CeCl6'],
   },
   hypervalent: {
     label: 'Hypervalent & Lone-Pair VSEPR',

@@ -71,7 +71,10 @@ function evalSingleBasis(
 ): number {
   const radial = Math.exp(-zeta * r);
   const pScale = 1.62 * zeta;
-  const dScale = (1.35 * zeta * zeta) / (1.0 + 0.22 * r);
+  const dScale = (1.32 * zeta * zeta) / (1.0 + 0.35 * r + 0.18 * r * r);
+  const fScale =
+    (1.15 * zeta * zeta * zeta) /
+    (1.0 + 0.45 * r + 0.22 * r * r + 0.08 * r * r * r);
   let angular = 1.0;
   switch (orbital) {
     case 's':
@@ -87,10 +90,10 @@ function evalSingleBasis(
       angular = dz * pScale;
       break;
     case 'dz2':
-      angular = (2 * dy * dy - dx * dx - dz * dz) * 0.95 * dScale;
+      angular = (2 * dz * dz - dx * dx - dy * dy) * 0.95 * dScale;
       break;
     case 'dx2y2':
-      angular = (dx * dx - dz * dz) * 1.15 * dScale;
+      angular = (dx * dx - dy * dy) * 1.15 * dScale;
       break;
     case 'dxy':
       angular = dx * dy * 2.15 * dScale;
@@ -100,6 +103,27 @@ function evalSingleBasis(
       break;
     case 'dyz':
       angular = dy * dz * 2.15 * dScale;
+      break;
+    case 'fz3':
+      angular = dz * (2 * dz * dz - 3 * dx * dx - 3 * dy * dy) * 0.48 * fScale;
+      break;
+    case 'fxz2':
+      angular = dx * (4 * dz * dz - dx * dx - dy * dy) * 0.52 * fScale;
+      break;
+    case 'fyz2':
+      angular = dy * (4 * dz * dz - dx * dx - dy * dy) * 0.52 * fScale;
+      break;
+    case 'fxyz':
+      angular = dx * dy * dz * 3.1 * fScale;
+      break;
+    case 'fz_x2y2':
+      angular = dz * (dx * dx - dy * dy) * 1.55 * fScale;
+      break;
+    case 'fx_x2_3y2':
+      angular = dx * (dx * dx - 3 * dy * dy) * 0.62 * fScale;
+      break;
+    case 'fy_3x2_y2':
+      angular = dy * (3 * dx * dx - dy * dy) * 0.62 * fScale;
       break;
   }
   return radial * angular;
@@ -160,7 +184,7 @@ function prepareTerms(mo: MolecularOrbital, atoms: AtomNode[]): PreparedAtomGrou
     if (atomNorm < 1e-6) continue;
 
     // Apply nonlinear dynamic-range compression to the total atomic amplitude while preserving
-    // exact linear ratios among (s, px, py, pz) components on the same atom
+    // exact linear ratios among (s, px, py, pz, d, f) components on the same atom
     const atomScale = Math.pow(atomNorm, gamma) / atomNorm;
     const atomTerms: { weight: number; orbital: LCAOContribution['orbital'] }[] = [];
 
@@ -227,13 +251,19 @@ function evalPreparedMorphField(
       const term = group.terms[j];
       atomVal += term.weight * evalSingleBasis(term.orbital, dx, dy, dz, r, zeta);
     }
-    if (r > 4.8) {
-      const u = (r - 4.8) / 1.2;
+    if (r > 4.2) {
+      const u = Math.min(1, (r - 4.2) / 1.8);
       atomVal *= 1 - u * u * (3 - 2 * u);
     }
 
-    // Smooth Gaussian Voronoi / Pauli core-locality weight prevents diffuse tails of distant atoms
-    // from erasing inner antibonding lobes across short X-H bonds while keeping exact nodal planes
+    // Gentle 4th-order radial envelope prevents 20+ distant centers in macromolecules (e.g. β-Carotene, ATP)
+    // from accumulating long-range tails onto remote atoms while preserving full bonding overlap at r < 2.2 Å.
+    if (prepared.length > 8) {
+      atomVal /= 1.0 + 0.045 * r2 * r2;
+    }
+
+    // Smooth Gaussian Voronoi / Pauli core-locality weight prevents diffuse tails of heavy atoms
+    // from erasing inner antibonding lobes across short X-H bonds while keeping smooth nodal planes.
     const loc = Math.exp(-2.65 * r2);
     const a2 = atomVal * atomVal * loc;
 
@@ -251,11 +281,16 @@ function evalPreparedMorphField(
   }
 
   const totalWeight = posWeight + negWeight;
-  if (totalWeight < 1e-12) return 0;
+  if (totalWeight <= 1e-30) return 0;
 
-  // At t = 1 (Merged MO): constructive same-phase terms add linearly (posSum or negSum), while
-  // opposite-phase terms meet at a sharp nodal plane without swallowing neighboring atomic cores
-  const mergedPsi = (posWeight * posSum - negWeight * negSum) / totalWeight;
+  // At t = 1 (Merged MO): blend linear LCAO superposition (posSum - negSum, which has C^∞ smooth,
+  // uniform gradients across nodal planes) with Pauli core-locality weighting (voronoiPsi, which
+  // protects compact antibonding cores across short polar X-H bonds) so multi-center polyenes and
+  // coordination complexes never develop steep Voronoi cell-wall creases.
+  const linearPsi = posSum - negSum;
+  const voronoiPsi = (posWeight * posSum - negWeight * negSum) / totalWeight;
+  const linearBlend = prepared.length > 4 ? 0.72 : 0.0;
+  const mergedPsi = linearBlend * linearPsi + (1 - linearBlend) * voronoiPsi;
   if (s >= 0.999) return mergedPsi;
 
   // At t = 0 (Separate AOs): C^∞ dominant-atom orbital amplitude and Inverse Participation Ratio P(r)
@@ -291,7 +326,7 @@ export function buildMorphIsosurfaceKeyframe(
   }
 
   // Compute 3D bounding box around active LCAO centers with generous padding (3.45 Å + scale allowance)
-  // so outer lobes of p/d and constructive π/σ orbitals never touch or clip against the grid walls.
+  // so outer lobes of p/d/f and constructive π/σ orbitals never touch or clip against the grid walls.
   let minX = Infinity,
     maxX = -Infinity;
   let minY = Infinity,
@@ -321,11 +356,31 @@ export function buildMorphIsosurfaceKeyframe(
   const spanZ = Math.max(4.8, maxZ - minZ);
   const maxSpan = Math.max(spanX, spanY, spanZ);
 
-  // Adaptive resolution: 34 cells along longest axis for compact molecules, 24 for macromolecules
-  const baseMaxCells = prepared.length > 12 || maxSpan > 11.5 ? 24 : 34;
-  const nx = Math.max(20, Math.round((spanX / maxSpan) * baseMaxCells));
-  const ny = Math.max(20, Math.round((spanY / maxSpan) * baseMaxCells));
-  const nz = Math.max(20, Math.round((spanZ / maxSpan) * baseMaxCells));
+  // Aspect-ratio-aware voxel budgeting:
+  // - Coordination complexes (d/f orbitals): 40 cells along max axis (~0.24 Å voxel step) to resolve
+  //   6- and 8-lobe nodal cones and double-collar rings cleanly.
+  // - Elongated macromolecules (e.g. β-Carotene, ATP): allow up to 44 cells along the longest molecular
+  //   axis while scaling shorter axes proportionally (capped at ~26,000 total cells) so individual C=C
+  //   π lobes (~1.35 Å spacing) are never undersampled into jagged or broken islands.
+  const hasDOrFOrbital = prepared.some((g) =>
+    g.terms.some((rt) => rt.orbital.startsWith('d') || rt.orbital.startsWith('f'))
+  );
+  const isLargeMolecule = prepared.length > 12 || maxSpan > 11.5;
+  const baseMaxCells = isLargeMolecule ? 58 : hasDOrFOrbital ? 40 : 36;
+  const minAxisCells = isLargeMolecule ? 18 : 22;
+  let nx = Math.max(minAxisCells, Math.round((spanX / maxSpan) * baseMaxCells));
+  let ny = Math.max(minAxisCells, Math.round((spanY / maxSpan) * baseMaxCells));
+  let nz = Math.max(minAxisCells, Math.round((spanZ / maxSpan) * baseMaxCells));
+
+  // Keep total grid vertices comfortably below the 131,072 edge-hash stride and within fast interactive budget
+  const maxTotalCells = isLargeMolecule ? 36000 : 68000;
+  const currentCells = nx * ny * nz;
+  if (currentCells > maxTotalCells) {
+    const scaleDown = Math.cbrt(maxTotalCells / currentCells);
+    nx = Math.max(18, Math.floor(nx * scaleDown));
+    ny = Math.max(18, Math.floor(ny * scaleDown));
+    nz = Math.max(18, Math.floor(nz * scaleDown));
+  }
 
   const dx = spanX / nx;
   const dy = spanY / ny;
@@ -728,7 +783,7 @@ function extractPhaseIsosurface(
   const idxOut = new Uint32Array(indices);
 
   if (posOut.length > 0 && idxOut.length > 0) {
-    smoothIsosurfaceTangentPlaneAndNormals(posOut, normOut, idxOut, 2, 0.42);
+    smoothIsosurfaceTangentPlaneAndNormals(posOut, normOut, idxOut, 3, 0.38);
   }
 
   return {
@@ -741,10 +796,11 @@ function extractPhaseIsosurface(
 /**
  * Performs tangent-plane Laplacian vertex relaxation:
  *   p_i <- p_i + λ (I - n_i n_i^T) (p_avg - p_i)
- * followed by 1-ring normal averaging and unit normalization.
+ * followed by 1-ring normal averaging, unit normalization, and post-smoothing
+ * triangle winding verification.
  * Because displacement is strictly orthogonal to the scalar-field gradient normal n_i,
  * vertices stay on the exact F(p) = isoValue level set with zero volume shrinkage while
- * eliminating Marching Tetrahedra diagonal grid ripples.
+ * eliminating Marching Tetrahedra diagonal grid ripples and inverted sliver triangles.
  */
 function smoothIsosurfaceTangentPlaneAndNormals(
   positions: Float32Array,
@@ -862,6 +918,37 @@ function smoothIsosurfaceTangentPlaneAndNormals(
     normals[v3] = nx / len;
     normals[v3 + 1] = ny / len;
     normals[v3 + 2] = nz / len;
+  }
+
+  // Post-smoothing winding verification: ensure every triangle's geometric face normal
+  // aligns with its smoothed vertex normals after tangent-plane vertex relaxation.
+  for (let t = 0; t < indices.length; t += 3) {
+    const i0 = indices[t];
+    const i1 = indices[t + 1];
+    const i2 = indices[t + 2];
+
+    const p0x = positions[i0 * 3],
+      p0y = positions[i0 * 3 + 1],
+      p0z = positions[i0 * 3 + 2];
+    const ux = positions[i1 * 3] - p0x,
+      uy = positions[i1 * 3 + 1] - p0y,
+      uz = positions[i1 * 3 + 2] - p0z;
+    const vx = positions[i2 * 3] - p0x,
+      vy = positions[i2 * 3 + 1] - p0y,
+      vz = positions[i2 * 3 + 2] - p0z;
+
+    const fnx = uy * vz - uz * vy;
+    const fny = uz * vx - ux * vz;
+    const fnz = ux * vy - uy * vx;
+
+    const gnx = normals[i0 * 3] + normals[i1 * 3] + normals[i2 * 3];
+    const gny = normals[i0 * 3 + 1] + normals[i1 * 3 + 1] + normals[i2 * 3 + 1];
+    const gnz = normals[i0 * 3 + 2] + normals[i1 * 3 + 2] + normals[i2 * 3 + 2];
+
+    if (fnx * gnx + fny * gny + fnz * gnz < 0) {
+      indices[t + 1] = i2;
+      indices[t + 2] = i1;
+    }
   }
 }
 

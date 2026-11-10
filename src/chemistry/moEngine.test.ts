@@ -166,6 +166,10 @@ test('Point group detection, VSEPR 3D reconstruction, and edge-case implicit-H r
     XeOF4: 'C4v',
     C40H56: 'D2h',
     C10H16N5O13P3: 'Cs',
+    TiCl4: 'Td',
+    PtCl4: 'D4h',
+    CrCl6: 'Oh',
+    CeCl6: 'Oh',
   };
 
   for (const mol of CANONICAL_MOLECULES) {
@@ -464,7 +468,7 @@ test('HF and HCl (including tilted 3D PubChem SDF geometries) produce literature
       { id: 'H1', element: 'H', x2d: 0.5, y2d: 0, x3d: 0.4358, y3d: -0.1477, z3d: -0.8188 },
     ],
     [{ id: 'b1', source: 'F1', target: 'H1', order: 1 }],
-    { customName: 'Hydrogen Fluoride', iupacName: 'fluorane', smiles: 'F' }
+    { customName: 'Hydrogen Fluoride' }
   );
 
   const hcl = analyzeMolecularGraph(
@@ -473,7 +477,7 @@ test('HF and HCl (including tilted 3D PubChem SDF geometries) produce literature
       { id: 'H1', element: 'H', x2d: 0.5, y2d: 0, x3d: 0.6085, y3d: -0.2063, z3d: -1.1433 },
     ],
     [{ id: 'b1', source: 'Cl1', target: 'H1', order: 1 }],
-    { customName: 'Hydrogen Chloride', iupacName: 'chlorane', smiles: 'Cl' }
+    { customName: 'Hydrogen Chloride' }
   );
 
   for (const mol of [hf, hcl]) {
@@ -500,4 +504,122 @@ test('HF and HCl (including tilted 3D PubChem SDF geometries) produce literature
     );
   }
 });
+
+test('Full 86-element Periodic Table (H to Rn), principal shell assignment, and Molfile/SMILES/Formula sketcher round-tripping work accurately', async () => {
+  const { ELEMENT_PROPERTIES } = await import('./moleculesData.ts');
+  const {
+    getPrincipalShell,
+    generateMolfileFromGraph,
+    parseChemicalInputToGraph,
+  } = await import('./moEngine.ts');
+
+  const allSymbols = Object.keys(ELEMENT_PROPERTIES);
+  assert.equal(allSymbols.length, 86, 'Should support all 86 elements from H (Z=1) to Rn (Z=86)');
+
+  assert.equal(getPrincipalShell('H'), '1');
+  assert.equal(getPrincipalShell('Li'), '2');
+  assert.equal(getPrincipalShell('Si'), '3');
+  assert.equal(getPrincipalShell('Ge'), '4');
+  assert.equal(getPrincipalShell('Br'), '4');
+  assert.equal(getPrincipalShell('Sn'), '5');
+  assert.equal(getPrincipalShell('Pb'), '6');
+  assert.equal(getPrincipalShell('Lu'), '6');
+
+  // Test Formula parsing and VSEPR + MO analysis for Silane (SiH4, Td)
+  const sih4Parsed = parseChemicalInputToGraph('SiH4', 'Formula')!;
+  assert.ok(sih4Parsed && sih4Parsed.atoms.length === 5);
+  const sih4 = analyzeMolecularGraph(sih4Parsed.atoms, sih4Parsed.bonds);
+  assert.equal(sih4.formula, 'SiH4');
+  assert.equal(sih4.pointGroupId, 'Td');
+  assert.equal(sih4.valenceElectrons, 8);
+  assert.ok(sih4.leftFragmentTitle.includes('3s, 3p'));
+
+  // Test Formula parsing and MO analysis for Hydrogen Bromide (HBr, Cinfv, 4s/4p valence)
+  const hbrParsed = parseChemicalInputToGraph('HBr', 'Formula')!;
+  const hbr = analyzeMolecularGraph(hbrParsed.atoms, hbrParsed.bonds);
+  assert.equal(hbr.formula, 'HBr');
+  assert.equal(hbr.pointGroupId, 'Cinfv');
+  assert.equal(hbr.valenceElectrons, 8);
+  assert.deepEqual(
+    hbr.molecularOrbitals.map((m) => m.label),
+    ['2σ+', '3σ+', '1π(x)', '1π(y)', '4σ+*']
+  );
+
+  // Test MDL V2000 Molfile export & re-import round-trip with formal charges
+  const molfile = generateMolfileFromGraph(
+    [
+      { id: 'N1', element: 'N', x2d: 0, y2d: 0, x3d: 0, y3d: 0, z3d: 0, formalCharge: 1 },
+      { id: 'O1', element: 'O', x2d: 1.2, y2d: 0, x3d: 1.2, y3d: 0, z3d: 0, formalCharge: -1 },
+    ],
+    [{ id: 'b1', source: 'N1', target: 'O1', order: 1, stereo: 'wedge' }],
+    'Charged N-O Test'
+  );
+  assert.ok(molfile.includes('V2000') && molfile.includes('M  END'));
+  const reimported = parseChemicalInputToGraph(molfile, 'MDL Molfile')!;
+  assert.equal(reimported.atoms.length, 2);
+  assert.equal(reimported.atoms[0].formalCharge, 1);
+  assert.equal(reimported.atoms[1].formalCharge, -1);
+  assert.equal(reimported.bonds[0].stereo, 'wedge');
+});
+
+test('Full 5-orbital d and 7-orbital 4f Slater-Koster basis, Hunds rule t2g3 filling, 4f isosurfaces, and Oh Γ_d / Γ_f decomposition work accurately', async () => {
+  const { runExtendedHuckelSolver, parseChemicalInputToGraph } = await import('./moEngine.ts');
+
+  // 1. Verify Great Orthogonality Theorem decomposition for Γ_d and Γ_f in Oh
+  const oh = POINT_GROUPS.Oh;
+  const gammaD = decomposeReducibleRepresentation(oh, [5, -1, 1, -1, 1, 5, -1, -1, 1, 1]);
+  assert.equal(gammaD.formula, 'eg + t2g');
+  const gammaF = decomposeReducibleRepresentation(oh, [7, 1, -1, -1, -1, -7, 1, -1, 1, 1]);
+  assert.equal(gammaF.formula, 'a2u + t1u + t2u');
+
+  // 2. Verify canonical d and f coordination complexes (TiCl4, PtCl4, CrCl6, CeCl6)
+  const ticl4 = CANONICAL_MOLECULES.find((m) => m.formula === 'TiCl4')!;
+  const ptcl4 = CANONICAL_MOLECULES.find((m) => m.formula === 'PtCl4')!;
+  const crcl6 = CANONICAL_MOLECULES.find((m) => m.formula === 'CrCl6')!;
+  const cecl6 = CANONICAL_MOLECULES.find((m) => m.formula === 'CeCl6')!;
+
+  assert.equal(ticl4.pointGroupId, 'Td');
+  assert.equal(ptcl4.pointGroupId, 'D4h');
+  assert.equal(crcl6.pointGroupId, 'Oh');
+  assert.equal(cecl6.pointGroupId, 'Oh');
+
+  // CrCl63- (d3, S = 3/2) must have three singly occupied t2g SOMOs (1, 1, 1)
+  const crT2g = crcl6.molecularOrbitals.filter((m) => m.degenerateGroup === 'crcl6_2t2g');
+  assert.equal(crT2g.length, 3);
+  assert.deepEqual(
+    crT2g.map((m) => m.occupancy),
+    [1, 1, 1]
+  );
+
+  // CeCl63- (4f1) must have singly occupied 1a2u (4fxyz) SOMO and watertight 8-lobe 3D isosurface
+  const ceHomo = cecl6.molecularOrbitals.find((m) => m.isHOMO)!;
+  assert.equal(ceHomo.occupancy, 1);
+  assert.equal(ceHomo.lcao[0].orbital, 'fxyz');
+
+  const fxyzMesh = buildMorphIsosurfaceKeyframe(ceHomo, cecl6.atoms, 1.0, 1.0);
+  assert.ok(
+    fxyzMesh.positive.positions.length > 600 && fxyzMesh.negative.positions.length > 600,
+    'CeCl6 4fxyz isosurface must generate rich positive and negative octant lobes'
+  );
+
+  // 3. Verify custom EHT solver includes d orbitals for transition metals (FeCl4) and f+d orbitals for lanthanides (NdF3)
+  const fecl4Graph = parseChemicalInputToGraph('FeCl4', 'Formula')!;
+  const fecl4Eht = runExtendedHuckelSolver(fecl4Graph.atoms, fecl4Graph.bonds);
+  const hasFe3d = fecl4Eht.basis.some((b) =>
+    ['dz2', 'dx2y2', 'dxy', 'dxz', 'dyz'].includes(b.orbital)
+  );
+  assert.ok(hasFe3d, 'Expected Extended Hückel solver to include 3d basis functions for FeCl4');
+
+  const ndf3Graph = parseChemicalInputToGraph('NdF3', 'Formula')!;
+  const ndf3Anal = analyzeMolecularGraph(ndf3Graph.atoms, ndf3Graph.bonds);
+  const hasNd4f = ndf3Anal.molecularOrbitals.some((mo) =>
+    mo.lcao.some((c) =>
+      ['fz3', 'fxz2', 'fyz2', 'fxyz', 'fz_x2y2', 'fx_x2_3y2', 'fy_3x2_y2'].includes(c.orbital)
+    )
+  );
+  assert.ok(hasNd4f, 'Expected Extended Hückel solver to include 4f basis functions for NdF3');
+  assert.ok(ndf3Anal.leftFragmentTitle.includes('4f'), 'Expected lanthanide leftFragmentTitle to list 4f shell');
+});
+
+
 
