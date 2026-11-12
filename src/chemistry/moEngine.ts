@@ -33,6 +33,15 @@ export function getImplicitHydrogenCountForAtom(
   atoms: AtomNode[],
   bonds: BondEdge[]
 ): number {
+  if (atom.element === 'O' && (atom.formalCharge ?? 0) === 0) {
+    const conn = bonds.filter((b) => b.source === atom.id || b.target === atom.id);
+    if (conn.length === 1 && conn[0].order === 1) {
+      const otherId = conn[0].source === atom.id ? conn[0].target : conn[0].source;
+      const other = atoms.find((x) => x.id === otherId);
+      if (other?.element === 'C') return 1;
+    }
+    return 0;
+  }
   if (atom.element !== 'C') {
     return 0;
   }
@@ -402,11 +411,11 @@ export function analyzeStarCoordinationTopology(
       const isMonoatomicLigands = branches.every((b) => b.distalAtoms.length === 0);
       const isMetalCenter =
         isTransitionMetal(centerAtom.element) || isLanthanide(centerAtom.element);
-      const polyatomicBranchCount = branches.filter((b) => b.distalAtoms.length > 0).length;
 
-      // Prevent non-star multi-center organic molecules like C2H4 (H2C=CH2) from being misidentified
-      // as a 3-branch star around C1 with one "=CH2" polyatomic branch
-      if (!isMonoatomicLigands && !isMetalCenter && polyatomicBranchCount < 2) {
+      // Only transition-metal and lanthanide coordination complexes use polyatomic-branch star topology;
+      // main-group centers use star VSEPR only for monoatomic ligands (AX_nE_m), while multi-center
+      // organic/inorganic chains and rings (C2H4, C4H2, PAHs, cages) use the general multi-center classifier.
+      if (!isMonoatomicLigands && !isMetalCenter) {
         continue;
       }
 
@@ -672,84 +681,88 @@ export function parseChemicalInputToGraph(
     };
   }
 
-  // 3. If format is Formula (or input looks like a stoich formula such as SiH4, GeCl4, HBr, PCl3, H2Se)
-  const isFormulaLike =
-    format === 'Formula' ||
-    (/^[A-Z][a-z]?\d*([A-Z][a-z]?\d*)+$/.test(text) && !/[=#()[\]]/.test(text));
-  if (isFormulaLike) {
-    const tokenRegex = /([A-Z][a-z]?)(\d*)/g;
-    const parts: { el: ElementSymbol; count: number }[] = [];
-    let match: RegExpExecArray | null;
-    while ((match = tokenRegex.exec(text)) !== null) {
-      const sym = match[1] as ElementSymbol;
-      if (!ELEMENT_PROPERTIES[sym]) continue;
-      const count = match[2] ? parseInt(match[2], 10) : 1;
-      parts.push({ el: sym, count: Math.min(12, Math.max(1, count)) });
+  // 3. If format is Formula (or input looks like a stoich formula such as SiH4, GeCl4, HBr, PCl3, H2Se
+  //    where each element symbol appears at most once and there are no SMILES ring-closure digits like C1CCCCC1)
+  const formulaTokens: { el: ElementSymbol; count: number }[] = [];
+  const tokenRegex = /([A-Z][a-z]?)(\d*)/g;
+  let tokMatch: RegExpExecArray | null;
+  while ((tokMatch = tokenRegex.exec(text)) !== null) {
+    const sym = tokMatch[1] as ElementSymbol;
+    if (ELEMENT_PROPERTIES[sym]) {
+      const count = tokMatch[2] ? parseInt(tokMatch[2], 10) : 1;
+      formulaTokens.push({ el: sym, count: Math.min(12, Math.max(1, count)) });
     }
-    if (parts.length > 0) {
-      const totalAtoms = parts.reduce((s, p) => s + p.count, 0);
-      if (totalAtoms >= 1 && totalAtoms <= 24) {
-        // Choose central atom as the unique element or lowest count non-H element
-        const centerPartIdx =
-          parts.findIndex((p) => p.count === 1 && p.el !== 'H') !== -1
-            ? parts.findIndex((p) => p.count === 1 && p.el !== 'H')
-            : 0;
-        const atoms: AtomNode[] = [];
-        const bonds: BondEdge[] = [];
-        const counts: Record<string, number> = {};
-        const nextId = (el: ElementSymbol) => {
-          counts[el] = (counts[el] || 0) + 1;
-          return `${el}${counts[el]}`;
-        };
+  }
+  const hasUniqueElementsOnly =
+    new Set(formulaTokens.map((p) => p.el)).size === formulaTokens.length;
+  const isFormulaLike =
+    hasUniqueElementsOnly &&
+    (format === 'Formula' ||
+      (/^[A-Z][a-z]?\d*([A-Z][a-z]?\d*)+$/.test(text) && !/[=#()[\]]/.test(text)));
+  if (isFormulaLike && formulaTokens.length > 0) {
+    const parts = formulaTokens;
+    const totalAtoms = parts.reduce((s, p) => s + p.count, 0);
+    if (totalAtoms >= 1 && totalAtoms <= 24) {
+      // Choose central atom as the unique element or lowest count non-H element
+      const centerPartIdx =
+        parts.findIndex((p) => p.count === 1 && p.el !== 'H') !== -1
+          ? parts.findIndex((p) => p.count === 1 && p.el !== 'H')
+          : 0;
+      const atoms: AtomNode[] = [];
+      const bonds: BondEdge[] = [];
+      const counts: Record<string, number> = {};
+      const nextId = (el: ElementSymbol) => {
+        counts[el] = (counts[el] || 0) + 1;
+        return `${el}${counts[el]}`;
+      };
 
-        const centerEl = parts[centerPartIdx].el;
-        const centerId = nextId(centerEl);
+      const centerEl = parts[centerPartIdx].el;
+      const centerId = nextId(centerEl);
+      atoms.push({
+        id: centerId,
+        element: centerEl,
+        x2d: 0,
+        y2d: 0,
+        x3d: 0,
+        y3d: 0,
+        z3d: 0,
+      });
+
+      const ligands: ElementSymbol[] = [];
+      parts.forEach((p, idx) => {
+        const rem = idx === centerPartIdx ? p.count - 1 : p.count;
+        for (let k = 0; k < rem; k++) ligands.push(p.el);
+      });
+
+      ligands.forEach((ligEl, idx) => {
+        const angle = (idx * 2 * Math.PI) / Math.max(1, ligands.length);
+        const r = ligEl === 'H' ? 1.15 : 1.45;
+        const lx = Number((Math.cos(angle) * r).toFixed(2));
+        const ly = Number((Math.sin(angle) * r).toFixed(2));
+        const lid = nextId(ligEl);
         atoms.push({
-          id: centerId,
-          element: centerEl,
-          x2d: 0,
-          y2d: 0,
-          x3d: 0,
-          y3d: 0,
+          id: lid,
+          element: ligEl,
+          x2d: lx,
+          y2d: ly,
+          x3d: lx,
+          y3d: -ly,
           z3d: 0,
         });
-
-        const ligands: ElementSymbol[] = [];
-        parts.forEach((p, idx) => {
-          const rem = idx === centerPartIdx ? p.count - 1 : p.count;
-          for (let k = 0; k < rem; k++) ligands.push(p.el);
+        const order: 1 | 2 = ligEl === 'O' && ligands.length <= 3 ? 2 : 1;
+        bonds.push({
+          id: `b_form_${idx + 1}`,
+          source: centerId,
+          target: lid,
+          order,
         });
+      });
 
-        ligands.forEach((ligEl, idx) => {
-          const angle = (idx * 2 * Math.PI) / Math.max(1, ligands.length);
-          const r = ligEl === 'H' ? 1.15 : 1.45;
-          const lx = Number((Math.cos(angle) * r).toFixed(2));
-          const ly = Number((Math.sin(angle) * r).toFixed(2));
-          const lid = nextId(ligEl);
-          atoms.push({
-            id: lid,
-            element: ligEl,
-            x2d: lx,
-            y2d: ly,
-            x3d: lx,
-            y3d: -ly,
-            z3d: 0,
-          });
-          const order: 1 | 2 = ligEl === 'O' && ligands.length <= 3 ? 2 : 1;
-          bonds.push({
-            id: `b_form_${idx + 1}`,
-            source: centerId,
-            target: lid,
-            order,
-          });
-        });
-
-        return { atoms, bonds, title: text };
-      }
+      return { atoms, bonds, title: text };
     }
   }
 
-  // 4. Parse linear/branched/cyclic SMILES strings (e.g. C=CC=C, c1ccccc1, CC(=O)O, [Li+], BrCBr)
+  // 4. Parse linear/branched/cyclic SMILES strings (e.g. C=CC=C, c1ccccc1, C1CCCCC1, CCCCCCCCCCCC, CC(=O)O, [Li+], BrCBr)
   const atoms: AtomNode[] = [];
   const bonds: BondEdge[] = [];
   const counts: Record<string, number> = {};
@@ -815,6 +828,24 @@ export function parseChemicalInputToGraph(
             target: currentAtomId,
             order: pendingOrder !== 1 ? pendingOrder : existing.order,
           });
+          // If this closes a simple ring of 3..8 atoms, arrange those ring vertices into a regular polygon
+          const startIdx = atoms.findIndex((a) => a.id === existing.atomId);
+          const endIdx = atoms.findIndex((a) => a.id === currentAtomId);
+          const ringLen = endIdx - startIdx + 1;
+          if (startIdx >= 0 && ringLen >= 3 && ringLen <= 8) {
+            const rPoly = 1.42 / (2 * Math.sin(Math.PI / ringLen));
+            const anchorX = atoms[startIdx].x2d;
+            const anchorY = atoms[startIdx].y2d;
+            for (let k = 0; k < ringLen; k++) {
+              const theta = (k * 2 * Math.PI) / ringLen;
+              const rx = Number((anchorX + rPoly * Math.cos(theta)).toFixed(2));
+              const ry = Number((anchorY + rPoly * Math.sin(theta)).toFixed(2));
+              atoms[startIdx + k].x2d = rx;
+              atoms[startIdx + k].y2d = ry;
+              atoms[startIdx + k].x3d = rx;
+              atoms[startIdx + k].y3d = -ry;
+            }
+          }
           ringClosures.delete(ch);
         } else {
           ringClosures.set(ch, { atomId: currentAtomId, order: pendingOrder });
@@ -872,13 +903,45 @@ export function parseChemicalInputToGraph(
     if (parsedEl) {
       const id = nextId(parsedEl);
       const prevAtom = atoms.find((a) => a.id === currentAtomId);
-      const angle = stepIdx % 2 === 0 ? -Math.PI / 6 : Math.PI / 6;
-      const dist = 1.28;
+      const prevIdx = atoms.findIndex((a) => a.id === currentAtomId);
+      const isBranchRoot =
+        branchStack.length > 0 && currentAtomId === branchStack[branchStack.length - 1];
+      // Count existing bonds on prevAtom to determine main chain vs branch direction
+      const prevDeg = prevAtom
+        ? bonds.filter((b) => b.source === prevAtom.id || b.target === prevAtom.id).length
+        : 0;
+      // Compute graph distance of prevAtom from C1 so main-chain zigzag strictly alternates ±30°
+      let prevDepth = Math.max(0, prevIdx);
+      if (prevAtom) {
+        let d = 0;
+        let curId: string | undefined = prevAtom.id;
+        const visited = new Set<string>();
+        while (curId && !visited.has(curId)) {
+          visited.add(curId);
+          const inBond = bonds.find((b) => b.target === curId);
+          if (inBond) {
+            d++;
+            curId = inBond.source;
+          } else {
+            break;
+          }
+        }
+        prevDepth = d;
+      }
+      const angle =
+        isBranchRoot || prevDeg >= 2
+          ? prevDepth % 2 === 0
+            ? -Math.PI / 2
+            : Math.PI / 2
+          : prevDepth % 2 === 0
+            ? -Math.PI / 6
+            : Math.PI / 6;
+      const dist = 1.42;
       const x2d = prevAtom
         ? Number((prevAtom.x2d + Math.cos(angle) * dist).toFixed(2))
         : Number(((stepIdx - 2) * 0.85).toFixed(2));
       const y2d = prevAtom
-        ? Number((prevAtom.y2d + Math.sin(angle) * dist + (branchStack.length > 0 ? 0.65 : 0)).toFixed(2))
+        ? Number((prevAtom.y2d + Math.sin(angle) * dist).toFixed(2))
         : 0;
 
       atoms.push({
@@ -941,47 +1004,173 @@ export function expandImplicitHydrogens(
 
     const connectedBonds = bonds.filter((b) => b.source === atom.id || b.target === atom.id);
 
-    // Find average direction of existing neighbors to point hydrogens away
-    const neighborVectors: [number, number][] = [];
+    // 2D neighbor vectors for clean 2D sketcher layout
+    const neighborVectors2D: [number, number][] = [];
+    // 3D neighbor unit vectors for physical 3D tetrahedral (sp3) / trigonal planar (sp2) placement
+    const neighborVectors3D: [number, number, number][] = [];
     for (const b of connectedBonds) {
       const otherId = b.source === atom.id ? b.target : b.source;
       const other = atoms.find((a) => a.id === otherId);
       if (other) {
-        const dx = other.x2d - atom.x2d;
-        const dy = other.y2d - atom.y2d;
-        const len = Math.hypot(dx, dy) || 1;
-        neighborVectors.push([dx / len, dy / len]);
+        const dx2 = other.x2d - atom.x2d;
+        const dy2 = other.y2d - atom.y2d;
+        const len2 = Math.hypot(dx2, dy2) || 1;
+        neighborVectors2D.push([dx2 / len2, dy2 / len2]);
+
+        const dx3 = other.x3d - atom.x3d;
+        const dy3 = other.y3d - atom.y3d;
+        const dz3 = (other.z3d || 0) - (atom.z3d || 0);
+        const len3 = Math.hypot(dx3, dy3, dz3) || 1;
+        neighborVectors3D.push([dx3 / len3, dy3 / len3, dz3 / len3]);
       }
     }
 
-    let baseAngle = 0;
-    if (neighborVectors.length > 0) {
-      const sumX = neighborVectors.reduce((s, v) => s + v[0], 0);
-      const sumY = neighborVectors.reduce((s, v) => s + v[1], 0);
+    let baseAngle2D = 0;
+    if (neighborVectors2D.length > 0) {
+      const sumX = neighborVectors2D.reduce((s, v) => s + v[0], 0);
+      const sumY = neighborVectors2D.reduce((s, v) => s + v[1], 0);
       if (Math.hypot(sumX, sumY) > 0.1) {
-        baseAngle = Math.atan2(-sumY, -sumX);
-      } else if (neighborVectors.length === 2) {
-        baseAngle = Math.atan2(neighborVectors[0][0], -neighborVectors[0][1]);
+        baseAngle2D = Math.atan2(-sumY, -sumX);
+      } else if (neighborVectors2D.length === 2) {
+        baseAngle2D = Math.atan2(neighborVectors2D[0][0], -neighborVectors2D[0][1]);
       }
+    }
+
+    const r3d = (ELEMENT_PROPERTIES[atom.element]?.covalentRadius ?? 0.77) + 0.32;
+    const isSp3 =
+      connectedBonds.every((b) => b.order === 1) &&
+      (connectedBonds.length + missingH === 4 ||
+        (['N', 'P', 'As', 'Sb'].includes(atom.element) && connectedBonds.length + missingH === 3) ||
+        (['O', 'S', 'Se', 'Te'].includes(atom.element) && connectedBonds.length + missingH === 2));
+
+    // Compute exact 3D unit vectors for each implicit hydrogen
+    const hDirs3D: [number, number, number][] = [];
+    const k = neighborVectors3D.length;
+
+    if (isSp3 && k === 2 && missingH === 2) {
+      // Methylene (-CH2-): place the 2 C-H bonds in the plane perpendicular to C-C-C at ±54.735° (109.47° tetrahedral angle)
+      const u1 = neighborVectors3D[0];
+      const u2 = neighborVectors3D[1];
+      let bx = -(u1[0] + u2[0]);
+      let by = -(u1[1] + u2[1]);
+      let bz = -(u1[2] + u2[2]);
+      let bLen = Math.hypot(bx, by, bz);
+      if (bLen < 0.08) {
+        bx = -u1[1];
+        by = u1[0];
+        bz = 0;
+        bLen = Math.hypot(bx, by, bz) || 1;
+      }
+      bx /= bLen;
+      by /= bLen;
+      bz /= bLen;
+
+      // Normal to the u1-u2 plane
+      let nx = u1[1] * u2[2] - u1[2] * u2[1];
+      let ny = u1[2] * u2[0] - u1[0] * u2[2];
+      let nz = u1[0] * u2[1] - u1[1] * u2[0];
+      let nLen = Math.hypot(nx, ny, nz);
+      if (nLen < 0.08) {
+        nx = 0;
+        ny = 0;
+        nz = 1;
+      } else {
+        nx /= nLen;
+        ny /= nLen;
+        nz /= nLen;
+      }
+      // Orthogonalize n against b
+      const dotNB = nx * bx + ny * by + nz * bz;
+      nx -= dotNB * bx;
+      ny -= dotNB * by;
+      nz -= dotNB * bz;
+      nLen = Math.hypot(nx, ny, nz) || 1;
+      nx /= nLen;
+      ny /= nLen;
+      nz /= nLen;
+
+      const cTet = 1 / Math.sqrt(3); // cos(54.735°) ≈ 0.57735
+      const sTet = Math.sqrt(2 / 3); // sin(54.735°) ≈ 0.81650
+      hDirs3D.push([cTet * bx + sTet * nx, cTet * by + sTet * ny, cTet * bz + sTet * nz]);
+      hDirs3D.push([cTet * bx - sTet * nx, cTet * by - sTet * ny, cTet * bz - sTet * nz]);
+    } else if (isSp3 && k === 1 && missingH >= 1) {
+      // Methyl (-CH3), Amino (-NH2), or Hydroxyl (-OH): staggered 3D tetrahedral cone (cos 70.53° = 1/3, sin 70.53° = 2√2/3)
+      const u1 = neighborVectors3D[0];
+      const ax = -u1[0];
+      const ay = -u1[1];
+      const az = -u1[2];
+      let e1x = -ay;
+      let e1y = ax;
+      let e1z = 0;
+      let e1Len = Math.hypot(e1x, e1y, e1z);
+      if (e1Len < 0.1) {
+        e1x = 1;
+        e1y = 0;
+        e1z = 0;
+        e1Len = 1;
+      }
+      e1x /= e1Len;
+      e1y /= e1Len;
+      const e2x = ay * e1z - az * e1y;
+      const e2y = az * e1x - ax * e1z;
+      const e2z = ax * e1y - ay * e1x;
+
+      const cosCone = 1 / 3;
+      const sinCone = (2 * Math.sqrt(2)) / 3;
+      for (let i = 0; i < missingH; i++) {
+        const phi = (i * 2 * Math.PI) / 3;
+        const cp = Math.cos(phi);
+        const sp = Math.sin(phi);
+        hDirs3D.push([
+          cosCone * ax + sinCone * (cp * e1x + sp * e2x),
+          cosCone * ay + sinCone * (cp * e1y + sp * e2y),
+          cosCone * az + sinCone * (cp * e1z + sp * e2z),
+        ]);
+      }
+    } else if (isSp3 && k === 3 && missingH === 1) {
+      // Tertiary methine (-CH(R1)(R2)(R3)): 4th apex of 3D tetrahedron
+      const sx = neighborVectors3D[0][0] + neighborVectors3D[1][0] + neighborVectors3D[2][0];
+      const sy = neighborVectors3D[0][1] + neighborVectors3D[1][1] + neighborVectors3D[2][1];
+      const sz = neighborVectors3D[0][2] + neighborVectors3D[1][2] + neighborVectors3D[2][2];
+      if (Math.abs(sz) > 0.15 && Math.hypot(sx, sy, sz) > 0.15) {
+        const sLen = Math.hypot(sx, sy, sz);
+        hDirs3D.push([-sx / sLen, -sy / sLen, -sz / sLen]);
+      } else {
+        const bLen = Math.hypot(sx, sy) || 1;
+        const bx = Math.hypot(sx, sy) > 0.08 ? -sx / bLen : 0;
+        const by = Math.hypot(sx, sy) > 0.08 ? -sy / bLen : 0;
+        const signZ = connectedBonds.some((b) => b.stereo === 'wedge') ? -1 : 1;
+        const norm = Math.hypot(0.45 * bx, 0.45 * by, 0.893) || 1;
+        hDirs3D.push([(0.45 * bx) / norm, (0.45 * by) / norm, (signZ * 0.893) / norm]);
+      }
+    } else if (isSp3 && k === 0 && missingH === 4) {
+      // Bare Carbon -> Methane (CH4) regular tetrahedron
+      const s = 1 / Math.sqrt(3);
+      hDirs3D.push([s, s, s], [s, -s, -s], [-s, s, -s], [-s, -s, s]);
     }
 
     for (let i = 0; i < missingH; i++) {
-      const spread = missingH === 1 ? 0 : missingH === 2 ? (i === 0 ? -0.9 : 0.9) : (i * 2 * Math.PI) / missingH;
-      const angle = baseAngle + spread;
+      const spread2D =
+        missingH === 1 ? 0 : missingH === 2 ? (i === 0 ? -0.65 : 0.65) : (i * 2 * Math.PI) / missingH;
+      const angle2D = baseAngle2D + spread2D;
       const r2d = 0.95;
       const hId = `H_imp_${atom.id}_${hIndex++}`;
-      const hx2d = atom.x2d + Math.cos(angle) * r2d;
-      const hy2d = atom.y2d + Math.sin(angle) * r2d;
-      const hz3d = missingH >= 3 && i > 0 ? (i % 2 === 0 ? 0.75 : -0.75) : 0;
+      const hx2d = atom.x2d + Math.cos(angle2D) * r2d;
+      const hy2d = atom.y2d + Math.sin(angle2D) * r2d;
+
+      const dir3 = hDirs3D[i];
+      const hx3d = dir3 ? atom.x3d + dir3[0] * r3d : atom.x3d + Math.cos(angle2D) * r3d;
+      const hy3d = dir3 ? atom.y3d + dir3[1] * r3d : atom.y3d - Math.sin(angle2D) * r3d;
+      const hz3d = dir3 ? (atom.z3d || 0) + dir3[2] * r3d : 0;
 
       outAtoms.push({
         id: hId,
         element: 'H',
         x2d: Number(hx2d.toFixed(2)),
         y2d: Number(hy2d.toFixed(2)),
-        x3d: Number(hx2d.toFixed(2)),
-        y3d: Number((-hy2d).toFixed(2)),
-        z3d: hz3d,
+        x3d: Number(hx3d.toFixed(3)),
+        y3d: Number(hy3d.toFixed(3)),
+        z3d: Number(hz3d.toFixed(3)),
       });
 
       outBonds.push({
@@ -1564,9 +1753,10 @@ export function reconstruct3DGeometryFromVSEPR(
     });
   }
 
-  // Check if genuine 3D depth already exists for larger multi-center molecules (e.g. from PubChem 3D-SDF)
-  const maxAbsZ = atoms.reduce((m, a) => Math.max(m, Math.abs(a.z3d || 0)), 0);
-  if (maxAbsZ > 0.08) {
+  // Check if genuine 3D depth already exists on non-synthetic atoms (e.g. from PubChem 3D-SDF or canonical 3D cages)
+  const nonImpAtoms = atoms.filter((a) => !a.id.startsWith('H_imp_'));
+  const maxNonImpAbsZ = nonImpAtoms.reduce((m, a) => Math.max(m, Math.abs(a.z3d || 0)), 0);
+  if (maxNonImpAbsZ > 0.08) {
     const cx3d = atoms.reduce((s, a) => s + a.x3d, 0) / atoms.length;
     const cy3d = atoms.reduce((s, a) => s + a.y3d, 0) / atoms.length;
     const cz3d = atoms.reduce((s, a) => s + a.z3d, 0) / atoms.length;
@@ -1580,33 +1770,356 @@ export function reconstruct3DGeometryFromVSEPR(
     }));
   }
 
-  // Multi-center 3D tetrahedral z-displacement for flat 2D graphs with tetracoordinate centers (e.g. P in ATP or sp3 C)
-  const zOffsets = new Map<string, number>();
-  for (const center of atoms) {
-    const conn = bonds.filter((b) => b.source === center.id || b.target === center.id);
-    if (conn.length === 4) {
-      const neighbors = conn
-        .map((b) => atoms.find((a) => a.id === (b.source === center.id ? b.target : b.source)))
-        .filter((a): a is AtomNode => Boolean(a));
-      // Displace terminal substituents on tetracoordinate P / S / C along ±z to break artificial 2D planarity
-      const terminals = neighbors.filter(
-        (nb) => bonds.filter((b) => b.source === nb.id || b.target === nb.id).length <= 2
-      );
-      if (terminals.length >= 2) {
-        zOffsets.set(terminals[0].id, 1.18);
-        zOffsets.set(terminals[1].id, -1.18);
+  // Flat 2D multi-center graph (from 2D-SDF such as stearic acid / eicosane / vitamin E, SMILES, or 2D Sketcher):
+  // Identify sp3 tetrahedral heavy centers (all single bonds, zero multiple bonds) vs planar sp2/sp centers.
+  const heavyAtoms = atoms.filter((a) => a.element !== 'H');
+  const sp3HeavyIds = new Set<string>();
+  for (const a of heavyAtoms) {
+    const conn = bonds.filter((b) => b.source === a.id || b.target === a.id);
+    if (conn.length === 0 || !conn.every((b) => b.order === 1)) continue;
+    if (
+      (['C', 'Si', 'Ge', 'Sn'].includes(a.element) &&
+        (a.formalCharge ?? 0) === 0 &&
+        conn.length >= 2) ||
+      conn.length === 4
+    ) {
+      sp3HeavyIds.add(a.id);
+    }
+  }
+
+  // If the molecule is purely sp2/sp conjugated/aromatic/linear (no sp3 heavy centers), keep it planar at z = 0
+  if (sp3HeavyIds.size === 0) {
+    return atoms.map((a) => ({
+      ...a,
+      x2d: Number((a.x2d - cx2d).toFixed(2)),
+      y2d: Number((a.y2d - cy2d).toFixed(2)),
+      x3d: Number((a.x2d - cx2d).toFixed(3)),
+      y3d: Number((-(a.y2d - cy2d)).toFixed(3)),
+      z3d: Number((a.z3d || 0).toFixed(3)),
+    }));
+  }
+
+  // Build 3D coordinates map starting from centered 2D coordinates
+  const pos3D = new Map<string, [number, number, number]>();
+  for (const a of atoms) {
+    pos3D.set(a.id, [a.x2d - cx2d, -(a.y2d - cy2d), a.z3d || 0]);
+  }
+
+  // 1. Compute bipartite BFS graph distance across heavy-atom components so adjacent sp3 chain/ring carbons
+  //    alternate ±z_pucker = ±0.255 Å, relaxing 2D 120° angles to the exact 109.47° tetrahedral angle in 3D.
+  const heavyDepth = new Map<string, number>();
+  for (const root of heavyAtoms) {
+    if (heavyDepth.has(root.id)) continue;
+    heavyDepth.set(root.id, 0);
+    const queue: string[] = [root.id];
+    while (queue.length > 0) {
+      const currId = queue.shift()!;
+      const currD = heavyDepth.get(currId) ?? 0;
+      for (const b of bonds) {
+        const nextId = b.source === currId ? b.target : b.target === currId ? b.source : null;
+        if (!nextId || heavyDepth.has(nextId)) continue;
+        const nextAtom = atoms.find((x) => x.id === nextId);
+        if (nextAtom && nextAtom.element !== 'H') {
+          heavyDepth.set(nextId, currD + 1);
+          queue.push(nextId);
+        }
       }
     }
   }
 
-  return atoms.map((a) => ({
-    ...a,
-    x2d: Number((a.x2d - cx2d).toFixed(2)),
-    y2d: Number((a.y2d - cy2d).toFixed(2)),
-    x3d: Number((a.x2d - cx2d).toFixed(2)),
-    y3d: Number((-(a.y2d - cy2d)).toFixed(2)),
-    z3d: zOffsets.get(a.id) ?? (a.z3d || 0),
-  }));
+  for (const a of heavyAtoms) {
+    if (!sp3HeavyIds.has(a.id)) continue;
+    const heavyNeighbors = bonds
+      .filter((b) => b.source === a.id || b.target === a.id)
+      .map((b) => atoms.find((x) => x.id === (b.source === a.id ? b.target : b.source)))
+      .filter((x): x is AtomNode => Boolean(x && x.element !== 'H'));
+
+    if (heavyNeighbors.length >= 2) {
+      const d = heavyDepth.get(a.id) ?? 0;
+      const sign = d % 2 === 0 ? 1 : -1;
+      const cur = pos3D.get(a.id)!;
+      let x3 = cur[0];
+      let y3 = cur[1];
+
+      // If 2 heavy neighbors were drawn nearly collinear (> 155°) in the 2D sketcher, add in-plane zigzag offset too
+      if (heavyNeighbors.length === 2) {
+        const p1 = pos3D.get(heavyNeighbors[0].id)!;
+        const p2 = pos3D.get(heavyNeighbors[1].id)!;
+        const v1x = p1[0] - x3;
+        const v1y = p1[1] - y3;
+        const v2x = p2[0] - x3;
+        const v2y = p2[1] - y3;
+        const l1 = Math.hypot(v1x, v1y) || 1;
+        const l2 = Math.hypot(v2x, v2y) || 1;
+        const cosAng = (v1x * v2x + v1y * v2y) / (l1 * l2);
+        if (cosAng < -0.9) {
+          const ax = (p2[0] - p1[0]) / (Math.hypot(p2[0] - p1[0], p2[1] - p1[1]) || 1);
+          const ay = (p2[1] - p1[1]) / (Math.hypot(p2[0] - p1[0], p2[1] - p1[1]) || 1);
+          x3 += -ay * sign * 0.36;
+          y3 += ax * sign * 0.36;
+        }
+      }
+
+      pos3D.set(a.id, [x3, y3, sign * 0.255]);
+    }
+  }
+
+  // 2. Reconstruct 3D tetrahedral positions for terminal heavy substituents on tertiary (-CH(R)-)
+  //    and quaternary (-C(R1)(R2)-, -PO3, -SO2) centers
+  for (const center of heavyAtoms) {
+    const conn = bonds.filter((b) => b.source === center.id || b.target === center.id);
+    const heavyNeighbors = conn
+      .map((b) => atoms.find((x) => x.id === (b.source === center.id ? b.target : b.source)))
+      .filter((x): x is AtomNode => Boolean(x && x.element !== 'H'));
+
+    if (heavyNeighbors.length < 3) continue;
+    const isCenterSp3 = sp3HeavyIds.has(center.id) || conn.length === 4;
+    if (!isCenterSp3) continue;
+
+    const terminalHeavy = heavyNeighbors.filter((nb) => {
+      const nbHeavyDeg = bonds.filter((b) => {
+        if (b.source !== nb.id && b.target !== nb.id) return false;
+        const otherId = b.source === nb.id ? b.target : b.source;
+        const other = atoms.find((x) => x.id === otherId);
+        return Boolean(other && other.element !== 'H');
+      }).length;
+      return nbHeavyDeg === 1;
+    });
+    const backboneHeavy = heavyNeighbors.filter((nb) => !terminalHeavy.includes(nb));
+    const cPos = pos3D.get(center.id)!;
+
+    if (heavyNeighbors.length === 4 && terminalHeavy.length >= 2) {
+      const refNeighbors = backboneHeavy.length >= 2 ? backboneHeavy : heavyNeighbors.slice(0, 2);
+      const p1 = pos3D.get(refNeighbors[0].id)!;
+      const p2 = pos3D.get(refNeighbors[1].id)!;
+      const u1x = (p1[0] - cPos[0]) / (Math.hypot(p1[0] - cPos[0], p1[1] - cPos[1], p1[2] - cPos[2]) || 1);
+      const u1y = (p1[1] - cPos[1]) / (Math.hypot(p1[0] - cPos[0], p1[1] - cPos[1], p1[2] - cPos[2]) || 1);
+      const u2x = (p2[0] - cPos[0]) / (Math.hypot(p2[0] - cPos[0], p2[1] - cPos[1], p2[2] - cPos[2]) || 1);
+      const u2y = (p2[1] - cPos[1]) / (Math.hypot(p2[0] - cPos[0], p2[1] - cPos[1], p2[2] - cPos[2]) || 1);
+      let bx = -(u1x + u2x);
+      let by = -(u1y + u2y);
+      let bLen = Math.hypot(bx, by);
+      if (bLen < 0.1) {
+        bx = -u1y;
+        by = u1x;
+        bLen = Math.hypot(bx, by) || 1;
+      }
+      bx /= bLen;
+      by /= bLen;
+
+      const cTet = 1 / Math.sqrt(3);
+      const sTet = Math.sqrt(2 / 3);
+      for (let tIdx = 0; tIdx < 2; tIdx++) {
+        const term = terminalHeavy[tIdx];
+        const rBond =
+          (ELEMENT_PROPERTIES[center.element]?.covalentRadius ?? 0.77) +
+          (ELEMENT_PROPERTIES[term.element]?.covalentRadius ?? 0.77);
+        const zSign = tIdx === 0 ? 1 : -1;
+        pos3D.set(term.id, [
+          cPos[0] + rBond * cTet * bx,
+          cPos[1] + rBond * cTet * by,
+          cPos[2] + rBond * sTet * zSign,
+        ]);
+      }
+    } else if (heavyNeighbors.length === 3 && terminalHeavy.length >= 1 && sp3HeavyIds.has(center.id)) {
+      const term = terminalHeavy[0];
+      const chainNbs = heavyNeighbors.filter((nb) => nb.id !== term.id);
+      if (chainNbs.length === 2) {
+        const p1 = pos3D.get(chainNbs[0].id)!;
+        const p2 = pos3D.get(chainNbs[1].id)!;
+        const u1x = (p1[0] - cPos[0]) / (Math.hypot(p1[0] - cPos[0], p1[1] - cPos[1], p1[2] - cPos[2]) || 1);
+        const u1y = (p1[1] - cPos[1]) / (Math.hypot(p1[0] - cPos[0], p1[1] - cPos[1], p1[2] - cPos[2]) || 1);
+        const u2x = (p2[0] - cPos[0]) / (Math.hypot(p2[0] - cPos[0], p2[1] - cPos[1], p2[2] - cPos[2]) || 1);
+        const u2y = (p2[1] - cPos[1]) / (Math.hypot(p2[0] - cPos[0], p2[1] - cPos[1], p2[2] - cPos[2]) || 1);
+        let bx = -(u1x + u2x);
+        let by = -(u1y + u2y);
+        let bLen = Math.hypot(bx, by);
+        if (bLen < 0.1) {
+          bx = -u1y;
+          by = u1x;
+          bLen = Math.hypot(bx, by) || 1;
+        }
+        bx /= bLen;
+        by /= bLen;
+
+        const termBond = conn.find((b) => b.source === term.id || b.target === term.id);
+        const d = heavyDepth.get(center.id) ?? 0;
+        const zSign =
+          termBond?.stereo === 'dash' ? -1 : termBond?.stereo === 'wedge' ? 1 : d % 2 === 0 ? 1 : -1;
+        const rBond =
+          (ELEMENT_PROPERTIES[center.element]?.covalentRadius ?? 0.77) +
+          (ELEMENT_PROPERTIES[term.element]?.covalentRadius ?? 0.77);
+        const cTet = 1 / Math.sqrt(3);
+        const sTet = Math.sqrt(2 / 3);
+        pos3D.set(term.id, [
+          cPos[0] + rBond * cTet * bx,
+          cPos[1] + rBond * cTet * by,
+          cPos[2] + rBond * sTet * zSign,
+        ]);
+      }
+    }
+  }
+
+  // 3. Re-anchor and orient all terminal Hydrogens in 3D around their parent heavy atoms
+  //    using exact 109.47° tetrahedral (sp3) or 120° trigonal planar (sp2) geometry
+  for (const parent of heavyAtoms) {
+    const conn = bonds.filter((b) => b.source === parent.id || b.target === parent.id);
+    const hNeighbors = conn
+      .map((b) => atoms.find((x) => x.id === (b.source === parent.id ? b.target : b.source)))
+      .filter((x): x is AtomNode => Boolean(x && x.element === 'H'));
+    if (hNeighbors.length === 0) continue;
+
+    const heavyNbs = conn
+      .map((b) => atoms.find((x) => x.id === (b.source === parent.id ? b.target : b.source)))
+      .filter((x): x is AtomNode => Boolean(x && x.element !== 'H'));
+
+    const pPos = pos3D.get(parent.id)!;
+    const uVecs: [number, number, number][] = heavyNbs.map((nb) => {
+      const nbPos = pos3D.get(nb.id)!;
+      const dx = nbPos[0] - pPos[0];
+      const dy = nbPos[1] - pPos[1];
+      const dz = nbPos[2] - pPos[2];
+      const len = Math.hypot(dx, dy, dz) || 1;
+      return [dx / len, dy / len, dz / len];
+    });
+
+    const rXH = (ELEMENT_PROPERTIES[parent.element]?.covalentRadius ?? 0.77) + 0.32;
+    const isParentSp3 =
+      sp3HeavyIds.has(parent.id) ||
+      (conn.every((b) => b.order === 1) &&
+        (conn.length === 4 ||
+          (['N', 'P', 'As'].includes(parent.element) && conn.length === 3) ||
+          (['O', 'S', 'Se'].includes(parent.element) && conn.length === 2)));
+
+    if (isParentSp3 && uVecs.length === 2 && hNeighbors.length === 2) {
+      // Methylene (-CH2-): two tetrahedral C-H vectors at ±54.735° from outward bisector
+      const u1 = uVecs[0];
+      const u2 = uVecs[1];
+      let bx = -(u1[0] + u2[0]);
+      let by = -(u1[1] + u2[1]);
+      let bz = -(u1[2] + u2[2]);
+      let bLen = Math.hypot(bx, by, bz);
+      if (bLen < 0.08) {
+        bx = -u1[1];
+        by = u1[0];
+        bz = 0;
+        bLen = Math.hypot(bx, by, bz) || 1;
+      }
+      bx /= bLen;
+      by /= bLen;
+      bz /= bLen;
+
+      let nx = u1[1] * u2[2] - u1[2] * u2[1];
+      let ny = u1[2] * u2[0] - u1[0] * u2[2];
+      let nz = u1[0] * u2[1] - u1[1] * u2[0];
+      let nLen = Math.hypot(nx, ny, nz);
+      if (nLen < 0.08) {
+        nx = 0;
+        ny = 0;
+        nz = 1;
+      } else {
+        nx /= nLen;
+        ny /= nLen;
+        nz /= nLen;
+      }
+      const dotNB = nx * bx + ny * by + nz * bz;
+      nx -= dotNB * bx;
+      ny -= dotNB * by;
+      nz -= dotNB * bz;
+      nLen = Math.hypot(nx, ny, nz) || 1;
+      nx /= nLen;
+      ny /= nLen;
+      nz /= nLen;
+
+      const cTet = 1 / Math.sqrt(3);
+      const sTet = Math.sqrt(2 / 3);
+      pos3D.set(hNeighbors[0].id, [
+        pPos[0] + rXH * (cTet * bx + sTet * nx),
+        pPos[1] + rXH * (cTet * by + sTet * ny),
+        pPos[2] + rXH * (cTet * bz + sTet * nz),
+      ]);
+      pos3D.set(hNeighbors[1].id, [
+        pPos[0] + rXH * (cTet * bx - sTet * nx),
+        pPos[1] + rXH * (cTet * by - sTet * ny),
+        pPos[2] + rXH * (cTet * bz - sTet * nz),
+      ]);
+    } else if (isParentSp3 && uVecs.length === 1 && hNeighbors.length >= 1) {
+      // Methyl (-CH3), Amino (-NH2), Hydroxyl (-OH): staggered 3D tetrahedral cone
+      const u1 = uVecs[0];
+      const ax = -u1[0];
+      const ay = -u1[1];
+      const az = -u1[2];
+      let e1x = -ay;
+      let e1y = ax;
+      let e1z = 0;
+      let e1Len = Math.hypot(e1x, e1y, e1z);
+      if (e1Len < 0.1) {
+        e1x = 1;
+        e1y = 0;
+        e1z = 0;
+        e1Len = 1;
+      }
+      e1x /= e1Len;
+      e1y /= e1Len;
+      const e2x = ay * e1z - az * e1y;
+      const e2y = az * e1x - ax * e1z;
+      const e2z = ax * e1y - ay * e1x;
+
+      const cosCone = 1 / 3;
+      const sinCone = (2 * Math.sqrt(2)) / 3;
+      hNeighbors.forEach((hAtom, idx) => {
+        const phi = (idx * 2 * Math.PI) / 3;
+        const cp = Math.cos(phi);
+        const sp = Math.sin(phi);
+        pos3D.set(hAtom.id, [
+          pPos[0] + rXH * (cosCone * ax + sinCone * (cp * e1x + sp * e2x)),
+          pPos[1] + rXH * (cosCone * ay + sinCone * (cp * e1y + sp * e2y)),
+          pPos[2] + rXH * (cosCone * az + sinCone * (cp * e1z + sp * e2z)),
+        ]);
+      });
+    } else if (isParentSp3 && uVecs.length === 3 && hNeighbors.length === 1) {
+      // Methine (-CH(R1)(R2)(R3)): 4th apex opposite the 3 heavy bonds
+      const sx = uVecs[0][0] + uVecs[1][0] + uVecs[2][0];
+      const sy = uVecs[0][1] + uVecs[1][1] + uVecs[2][1];
+      const sz = uVecs[0][2] + uVecs[1][2] + uVecs[2][2];
+      const sLen = Math.hypot(sx, sy, sz);
+      if (sLen > 0.12) {
+        pos3D.set(hNeighbors[0].id, [
+          pPos[0] - (rXH * sx) / sLen,
+          pPos[1] - (rXH * sy) / sLen,
+          pPos[2] - (rXH * sz) / sLen,
+        ]);
+      } else {
+        pos3D.set(hNeighbors[0].id, [pPos[0], pPos[1], pPos[2] - rXH]);
+      }
+    }
+  }
+
+  // Center final 3D coordinates around the origin
+  let sumX = 0;
+  let sumY = 0;
+  let sumZ = 0;
+  for (const a of atoms) {
+    const p = pos3D.get(a.id)!;
+    sumX += p[0];
+    sumY += p[1];
+    sumZ += p[2];
+  }
+  const meanX = sumX / atoms.length;
+  const meanY = sumY / atoms.length;
+  const meanZ = sumZ / atoms.length;
+
+  return atoms.map((a) => {
+    const p = pos3D.get(a.id)!;
+    return {
+      ...a,
+      x2d: Number((a.x2d - cx2d).toFixed(2)),
+      y2d: Number((a.y2d - cy2d).toFixed(2)),
+      x3d: Number((p[0] - meanX).toFixed(3)),
+      y3d: Number((p[1] - meanY).toFixed(3)),
+      z3d: Number((p[2] - meanZ).toFixed(3)),
+    };
+  });
 }
 
 /**
@@ -1665,11 +2178,32 @@ export function detectPointGroup(atoms: AtomNode[], bonds: BondEdge[], charge = 
     return 'D2h';
   }
 
-  // Check symmetric rings (e.g. C6H6 -> D6h, C4H4 -> D4h)
-  if (heavy.length === 6 && heavy.every((a) => a.element === 'C') && bonds.length >= 6) {
-    return 'D6h';
+  // Check unsubstituted monocyclic planar rings (e.g. C6H6 or bare C6 hexagon -> D6h, C4H4 -> D4h)
+  const maxAbsZRing = atoms.reduce((m, a) => Math.max(m, Math.abs(a.z3d || 0)), 0);
+  if (
+    heavy.length === 6 &&
+    heavy.every((a) => a.element === 'C') &&
+    bonds.length >= 6 &&
+    atoms.length <= 12 &&
+    maxAbsZRing < 0.25
+  ) {
+    const heavyDegs = heavy.map(
+      (a) =>
+        bonds.filter(
+          (b) =>
+            (b.source === a.id || b.target === a.id) &&
+            heavy.some((h) => h.id === (b.source === a.id ? b.target : b.source))
+        ).length
+    );
+    if (heavyDegs.every((d) => d === 2)) return 'D6h';
   }
-  if (heavy.length === 4 && heavy.every((a) => a.element === 'C') && bonds.length >= 4) {
+  if (
+    heavy.length === 4 &&
+    heavy.every((a) => a.element === 'C') &&
+    bonds.length >= 4 &&
+    atoms.length <= 8 &&
+    maxAbsZRing < 0.25
+  ) {
     const degs = heavy.map(
       (a) =>
         bonds.filter(
@@ -1679,7 +2213,6 @@ export function detectPointGroup(atoms: AtomNode[], bonds: BondEdge[], charge = 
         ).length
     );
     if (degs.every((d) => d === 2)) return 'D4h';
-    return 'C2v';
   }
 
   // Central atom surrounded by nLig ligands (AX_nE_m VSEPR & d/f coordination point-group classification,
@@ -1762,7 +2295,186 @@ export function detectPointGroup(atoms: AtomNode[], bonds: BondEdge[], charge = 
   if (heavy.length === 2 && heavy[0].element === heavy[1].element) {
     const nH = atoms.filter((a) => a.element === 'H').length;
     if (nH === 2) return 'Dinfh';
-    if (nH === 4) return 'D2h';
+    if (nH === 4 || (nH === 6 && bonds.length >= 7)) return 'D2h';
+  }
+
+  // General 3D/2D Covariance & Symmetry-Operation Classifier for multi-center molecules:
+  // Handles PAHs and fused aromatics (Coronene D6h, Triphenylene D3h, Naphthalene/Anthracene/Pyrene/Biphenylene D2h,
+  // Phenanthrene/Azulene C2v), heterocycles & inorganic rings (Borazine/1,3,5-Triazine D3h, Pyrazine/1,4-Benzoquinone D2h,
+  // Pyridine/Furan/Thiophene/Pyrimidine C2v), perhalobenzenes (C6F6/C6Cl6 D6h), cycloalkanes (Cyclopropane D3h),
+  // 3D polyhedral cages (Cubane Oh, Adamantane/P4/Urotropine Td), and linear polyatomics (Diacetylene Dinfh, Cyanoacetylene Cinfv).
+  if (heavy.length >= 3) {
+    const has3dCoords = atoms.some(
+      (a) => Math.abs(a.x3d) > 1e-3 || Math.abs(a.y3d) > 1e-3 || Math.abs(a.z3d) > 1e-3
+    );
+    const getPos = (a: AtomNode): [number, number, number] =>
+      has3dCoords ? [a.x3d, a.y3d, a.z3d] : [a.x2d, -a.y2d, 0];
+
+    const nHvy = heavy.length;
+    let cx = 0;
+    let cy = 0;
+    let cz = 0;
+    for (const a of heavy) {
+      const [px, py, pz] = getPos(a);
+      cx += px;
+      cy += py;
+      cz += pz;
+    }
+    cx /= nHvy;
+    cy /= nHvy;
+    cz /= nHvy;
+
+    const pts = heavy.map((a) => {
+      const [px, py, pz] = getPos(a);
+      const deg = bonds.filter(
+        (b) =>
+          (b.source === a.id || b.target === a.id) &&
+          heavy.some((h) => h.id === (b.source === a.id ? b.target : b.source))
+      ).length;
+      return {
+        el: a.element,
+        deg,
+        x: px - cx,
+        y: py - cy,
+        z: pz - cz,
+      };
+    });
+
+    const cov: number[][] = [
+      [0, 0, 0],
+      [0, 0, 0],
+      [0, 0, 0],
+    ];
+    for (const p of pts) {
+      cov[0][0] += p.x * p.x;
+      cov[0][1] += p.x * p.y;
+      cov[0][2] += p.x * p.z;
+      cov[1][0] += p.y * p.x;
+      cov[1][1] += p.y * p.y;
+      cov[1][2] += p.y * p.z;
+      cov[2][0] += p.z * p.x;
+      cov[2][1] += p.z * p.y;
+      cov[2][2] += p.z * p.z;
+    }
+    for (let r = 0; r < 3; r++) {
+      for (let c = 0; c < 3; c++) {
+        cov[r][c] /= nHvy;
+      }
+    }
+
+    const { eigenvalues: covEigs, eigenvectors: covVecs } = jacobiEigenvalues(cov);
+    // covEigs sorted ascending: lambda0 <= lambda1 <= lambda2
+    const [lambda0, lambda1, lambda2] = covEigs;
+    const e0 = covVecs[0];
+    const e1 = covVecs[1];
+    const e2 = covVecs[2];
+
+    const proj = pts.map((p) => ({
+      el: p.el,
+      deg: p.deg,
+      u: p.x * e1[0] + p.y * e1[1] + p.z * e1[2],
+      v: p.x * e2[0] + p.y * e2[1] + p.z * e2[2],
+      w: p.x * e0[0] + p.y * e0[1] + p.z * e0[2],
+    }));
+
+    const rMax = Math.max(1, ...proj.map((p) => Math.hypot(p.u, p.v, p.w)));
+    const tol = Math.max(0.22, rMax * 0.075);
+
+    const hasInversion = proj.every((p) =>
+      proj.some(
+        (q) =>
+          q.el === p.el &&
+          q.deg === p.deg &&
+          Math.hypot(q.u + p.u, q.v + p.v, q.w + p.w) <= tol
+      )
+    );
+
+    // 1. Collinear / linear polyatomic chains (e.g. Diacetylene C4H2, Cyanogen C2N2, Carbon suboxide C3O2, Cyanoacetylene HC3N)
+    if (lambda0 < 0.015 && lambda1 < 0.015 && lambda2 > 0.25) {
+      const allPts = atoms.map((a) => {
+        const [px, py, pz] = getPos(a);
+        return {
+          el: a.element,
+          u: (px - cx) * e1[0] + (py - cy) * e1[1] + (pz - cz) * e1[2],
+          v: (px - cx) * e2[0] + (py - cy) * e2[1] + (pz - cz) * e2[2],
+          w: (px - cx) * e0[0] + (py - cy) * e0[1] + (pz - cz) * e0[2],
+        };
+      });
+      const allCollinear = allPts.every((p) => Math.hypot(p.u, p.w) < 0.2);
+      if (allCollinear) {
+        const allInv = allPts.every((p) =>
+          allPts.some((q) => q.el === p.el && Math.abs(q.v + p.v) <= tol)
+        );
+        return allInv ? 'Dinfh' : 'Cinfv';
+      }
+    }
+
+    // 2. 3D Isotropic Spherical-Top Polyhedral Cages (e.g. Cubane C8H8 -> Oh; Adamantane C10H16, P4, Urotropine -> Td)
+    if (lambda0 > 0.25 && lambda2 > 0.25 && lambda0 / lambda2 > 0.82) {
+      return hasInversion ? 'Oh' : 'Td';
+    }
+
+    // 3. Planar or σh-Symmetric Ring / Polycyclic Systems (lambda0 < 0.04)
+    const maxHeavyW = proj.reduce((m, p) => Math.max(m, Math.abs(p.w)), 0);
+    if (maxHeavyW < 0.25) {
+      const hasCn = (fold: number): boolean => {
+        const theta = (2 * Math.PI) / fold;
+        const ct = Math.cos(theta);
+        const st = Math.sin(theta);
+        return proj.every((p) => {
+          const ru = p.u * ct - p.v * st;
+          const rv = p.u * st + p.v * ct;
+          return proj.some(
+            (q) =>
+              q.el === p.el &&
+              q.deg === p.deg &&
+              Math.hypot(q.u - ru, q.v - rv, q.w - p.w) <= tol
+          );
+        });
+      };
+
+      // Candidate mirror plane angles in the (u, v) molecular plane
+      const candidateAngles: number[] = [0, Math.PI / 2];
+      for (const p of proj) {
+        if (Math.hypot(p.u, p.v) > 0.25) {
+          const ang = Math.atan2(p.v, p.u);
+          candidateAngles.push(ang, ang + Math.PI / 2);
+        }
+      }
+      for (let k = 0; k < 72; k++) {
+        candidateAngles.push((k * Math.PI) / 72);
+      }
+
+      const isMirrorAngle = (phi: number): boolean => {
+        const c2 = Math.cos(2 * phi);
+        const s2 = Math.sin(2 * phi);
+        return proj.every((p) => {
+          const mu = p.u * c2 + p.v * s2;
+          const mv = p.u * s2 - p.v * c2;
+          return proj.some(
+            (q) =>
+              q.el === p.el &&
+              q.deg === p.deg &&
+              Math.hypot(q.u - mu, q.v - mv, q.w - p.w) <= tol
+          );
+        });
+      };
+
+      const validMirrors = candidateAngles.filter(isMirrorAngle);
+      const hasMirror = validMirrors.length > 0;
+      const hasOrthogonalMirrors = validMirrors.some((phi) => isMirrorAngle(phi + Math.PI / 2));
+
+      const c6 = hasCn(6);
+      const c4 = hasCn(4);
+      const c3 = hasCn(3);
+      const c2 = hasCn(2);
+
+      if (c6 && hasMirror) return 'D6h';
+      if (c4 && hasMirror) return 'D4h';
+      if (c3 && hasMirror) return 'D3h';
+      if (c2 && hasOrthogonalMirrors) return 'D2h';
+      if (hasMirror) return 'C2v';
+    }
   }
 
   return 'Cs';
@@ -2200,7 +2912,8 @@ export function analyzeMolecularGraph(
     ? resolveCoordinationBonds(rawAtoms, rawBonds, false)
     : { atoms: rawAtoms, bonds: rawBonds };
 
-  const shouldExpandImplicitH = coordResolved.atoms.length <= 24;
+  const rawHeavyCount = coordResolved.atoms.filter((a) => a.element !== 'H').length;
+  const shouldExpandImplicitH = rawHeavyCount <= 28 && coordResolved.atoms.length <= 76;
   const { atoms, bonds } = shouldExpandImplicitH
     ? expandImplicitHydrogens(coordResolved.atoms, coordResolved.bonds)
     : { atoms: coordResolved.atoms, bonds: coordResolved.bonds };
@@ -2537,6 +3250,38 @@ export function analyzeMolecularGraph(
         irrepObj =
           multiPool.find((ir) => (isPi ? ir.id === 'Epp' : ir.id === 'Ep')) ||
           multiPool[0];
+      } else if (pg.id === 'D6h') {
+        // Evaluate inversion character χ(i) across centrosymmetric atom pairs (r_B ≈ -r_A)
+        let invChar = 0;
+        let invPairs = 0;
+        for (let k = 0; k < N; k++) {
+          const ck = vec[k];
+          if (Math.abs(ck) < 0.05) continue;
+          const ak = basis[k].atom;
+          const ok = basis[k].orbital;
+          const orbParity = ok === 's' || ok.startsWith('d') ? 1 : -1;
+          for (let m = 0; m < N; m++) {
+            if (basis[m].orbital !== ok) continue;
+            const am = basis[m].atom;
+            if (
+              am.element === ak.element &&
+              Math.hypot(ak.x3d + am.x3d, ak.y3d + am.y3d, ak.z3d + am.z3d) < 0.45
+            ) {
+              invChar += ck * vec[m] * orbParity;
+              invPairs++;
+              break;
+            }
+          }
+        }
+        const isUngerade = invPairs > 0 ? invChar < -0.02 : signChanges % 2 === 1;
+        const targetId = isPi
+          ? isUngerade
+            ? 'E2u'
+            : 'E1g'
+          : isUngerade
+            ? 'E1u'
+            : 'E2g';
+        irrepObj = multiPool.find((ir) => ir.id === targetId) || multiPool[0];
       } else {
         const centerDWeight = primaryAtom
           ? vec.reduce(
@@ -2585,6 +3330,37 @@ export function analyzeMolecularGraph(
           dim1Irreps[0];
       } else if (pg.id === 'D3h') {
         const targetId = isPi ? 'A2pp' : 'A1p';
+        irrepObj = dim1Irreps.find((ir) => ir.id === targetId) || dim1Irreps[0];
+      } else if (pg.id === 'D6h') {
+        let invChar = 0;
+        let invPairs = 0;
+        for (let k = 0; k < N; k++) {
+          const ck = vec[k];
+          if (Math.abs(ck) < 0.05) continue;
+          const ak = basis[k].atom;
+          const ok = basis[k].orbital;
+          const orbParity = ok === 's' || ok.startsWith('d') ? 1 : -1;
+          for (let m = 0; m < N; m++) {
+            if (basis[m].orbital !== ok) continue;
+            const am = basis[m].atom;
+            if (
+              am.element === ak.element &&
+              Math.hypot(ak.x3d + am.x3d, ak.y3d + am.y3d, ak.z3d + am.z3d) < 0.45
+            ) {
+              invChar += ck * vec[m] * orbParity;
+              invPairs++;
+              break;
+            }
+          }
+        }
+        const isUngerade = invPairs > 0 ? invChar < -0.02 : signChanges % 2 === 1;
+        const targetId = isPi
+          ? isUngerade
+            ? 'A2u'
+            : 'B2g'
+          : isUngerade
+            ? 'B1u'
+            : 'A1g';
         irrepObj = dim1Irreps.find((ir) => ir.id === targetId) || dim1Irreps[0];
       } else {
         const centerPWeight = primaryAtom

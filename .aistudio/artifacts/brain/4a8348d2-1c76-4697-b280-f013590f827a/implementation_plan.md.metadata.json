@@ -1,6 +1,0 @@
-{
-  "summary":  "Implementation plan for integrating 5 real cubic d orbitals and 7 real cubic f orbitals into the Extended Huckel LCAO-MO quantum solver, point-group symmetry analyzer, 3D Marching Tetrahedra isosurface engine, and benchmark molecule library.",
-  "updatedAt":  "2026-11-10T07:36:24.468696985Z",
-  "requestFeedback":  true,
-  "userFacing":  true
-}

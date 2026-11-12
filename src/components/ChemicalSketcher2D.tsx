@@ -295,11 +295,10 @@ export const ChemicalSketcher2D: React.FC<ChemicalSketcher2DProps> = ({
       activeTool === 'wedge' ||
       activeTool === 'dash'
     ) {
-      const carbonEl: ElementSymbol = 'C';
-      const newId = getNextAtomId(carbonEl, atoms);
-      const newCarbonAtom: AtomNode = {
+      const newId = getNextAtomId(activeElement, atoms);
+      const newAtom: AtomNode = {
         id: newId,
-        element: carbonEl,
+        element: activeElement,
         x2d: x,
         y2d: y,
         x3d: x,
@@ -307,9 +306,31 @@ export const ChemicalSketcher2D: React.FC<ChemicalSketcher2DProps> = ({
         z3d: activeTool === 'wedge' ? 0.6 : activeTool === 'dash' ? -0.6 : 0,
       };
 
-      // Second click is on empty canvas (not an atom): only add a Carbon atom
-      setSelectedAtomId(null);
-      commitGraphChange([...atoms, newCarbonAtom], bonds);
+      const sourceAtom = selectedAtomId
+        ? atoms.find((a) => a.id === selectedAtomId)
+        : undefined;
+
+      if (sourceAtom) {
+        // First click on atom, second click on empty canvas space:
+        // Add an atom of the selected element at (x, y) and connect with first atom using the selected bond
+        const order: 1 | 2 | 3 =
+          activeTool === 'bond_2' ? 2 : activeTool === 'bond_3' ? 3 : 1;
+        const stereo: BondEdge['stereo'] =
+          activeTool === 'wedge' ? 'wedge' : activeTool === 'dash' ? 'dash' : 'none';
+        const newBond: BondEdge = {
+          id: `b_${Date.now()}`,
+          source: sourceAtom.id,
+          target: newId,
+          order,
+          stereo,
+        };
+        setSelectedAtomId(null);
+        commitGraphChange([...atoms, newAtom], [...bonds, newBond]);
+      } else {
+        // No first atom selected: place standalone atom of the selected element at (x, y)
+        setSelectedAtomId(null);
+        commitGraphChange([...atoms, newAtom], bonds);
+      }
     }
   };
 
@@ -388,36 +409,25 @@ export const ChemicalSketcher2D: React.FC<ChemicalSketcher2DProps> = ({
         return;
       }
 
-      // Second click is the same atom (no other atom selected): only add a Carbon atom nearby
-      const connected = bonds.filter((b) => b.source === atom.id || b.target === atom.id);
-      let angle = -Math.PI / 6;
-      if (connected.length === 1) {
-        const otherId = connected[0].source === atom.id ? connected[0].target : connected[0].source;
-        const other = atoms.find((a) => a.id === otherId);
-        if (other) {
-          const baseAngle = Math.atan2(atom.y2d - other.y2d, atom.x2d - other.x2d);
-          angle = baseAngle + Math.PI / 3;
-        }
-      } else if (connected.length >= 2) {
-        angle = -Math.PI / 2 + connected.length * 1.1;
-      }
-
-      const bondLen = 1.25;
-      const nx = Number((atom.x2d + Math.cos(angle) * bondLen).toFixed(2));
-      const ny = Number((atom.y2d + Math.sin(angle) * bondLen).toFixed(2));
-      const newId = getNextAtomId('C', atoms);
-      const newAtom: AtomNode = {
-        id: newId,
-        element: 'C',
-        x2d: nx,
-        y2d: ny,
-        x3d: nx,
-        y3d: -ny,
-        z3d: activeTool === 'wedge' ? 0.65 : activeTool === 'dash' ? -0.65 : 0,
-      };
+      // Second click is the same atom: replace the current atom with the selected element
+      const newId =
+        atom.element === activeElement
+          ? atom.id
+          : getNextAtomId(
+              activeElement,
+              atoms.filter((a) => a.id !== atom.id)
+            );
+      const updatedAtoms = atoms.map((a) =>
+        a.id === atom.id ? { ...a, id: newId, element: activeElement } : a
+      );
+      const updatedBonds = bonds.map((b) => ({
+        ...b,
+        source: b.source === atom.id ? newId : b.source,
+        target: b.target === atom.id ? newId : b.target,
+      }));
 
       setSelectedAtomId(null);
-      commitGraphChange([...atoms, newAtom], bonds);
+      commitGraphChange(updatedAtoms, updatedBonds);
     }
   };
 
@@ -1263,7 +1273,7 @@ export const ChemicalSketcher2D: React.FC<ChemicalSketcher2DProps> = ({
               <>
                 <span aria-hidden="true">·</span>
                 <span className="text-blue-700 font-semibold">
-                  Selected: {selectedAtomId} (click 2nd atom to bond, or canvas to add C)
+                  Selected: {selectedAtomId} (click 2nd atom to bond, canvas to bond new {activeElement}, or same atom to replace with {activeElement})
                 </span>
               </>
             )}

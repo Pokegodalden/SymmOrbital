@@ -26,12 +26,13 @@ At the top of the screen, you can load any molecule or coordination complex in t
 
 Use the **2D Sketcher** on the left to draw or modify any chemical structure, or click **`Full 2D Sketcher ↗`** in the lower-right corner of the **Tools & Elements** box to open the full **PubChem-Style Draw Structure Modal**:
 
-- **Two-Click Atom Bonding & Carbon Placement (`1`, `2`, `3` Bond Modes)**:
+- **Two-Click Atom Bonding & Active-Element Placement (`1`, `2`, `3` Bond Modes)**:
   - Select **Single (`1`)**, **Double (`2`)**, or **Triple (`3`)** bond mode.
   - **First Click on an Atom**: Selects that atom as the bond start point (highlighted with a blue selection ring).
   - **Second Click on Another Atom**: Immediately adds (or updates to) a single, double, or triple bond between the two selected atoms.
-  - **Second Click on Empty Space**: If your second click is not on an existing atom, a standalone **Carbon ($\mathrm{C}$) atom** is placed at that canvas position without adding a bond.
-  - **Click-and-Drag**: You can also click and drag from any existing atom to sprout a new bonded atom at the release point, or click an existing bond to cycle or update its bond order.
+  - **Second Click on Empty Canvas Space**: Places a new atom of the **currently selected element** at the spot of the second click and connects it to the first atom with the selected bond.
+  - **Second Click on the Same Atom**: Replaces that atom in-place with the **currently selected element** (and updates its atom ID and connected bonds).
+  - **Click on Empty Space (with No First Atom Selected)**: Places a standalone atom of the **currently selected element** (defaulting to $\mathrm{C}$) at that spot without adding a bond.
 - **All 86 Elements ($\mathrm{H}$ through $\mathrm{Rn}$)**:
   - Pick common elements from the quick palette, click **Periodic Table**, or open **`Full 2D Sketcher ↗`** to access all **86 elements**—including $3d/4d/5d$ transition metals ($\mathrm{Sc\text{--}Zn}$, $\mathrm{Y\text{--}Cd}$, $\mathrm{Lu\text{--}Hg}$) and $4f$ lanthanides ($\mathrm{La\text{--}Lu}$).
 - **Full 2D Sketcher Modal Features (`Full 2D Sketcher ↗`)**:

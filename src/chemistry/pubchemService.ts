@@ -266,9 +266,13 @@ export function parseSdfToGraph(
   const meanBondLengthAngstrom =
     bondLengthCount > 0 ? Number((bondLengthSum / bondLengthCount).toFixed(3)) : undefined;
 
-  // For large molecules (> 24 atoms), strip explicit C-H hydrogens (which are handled by skeletal implicit-H rules)
-  // while preserving up to 60 heavy atoms and any explicit heteroatom hydrogens (O-H, N-H, S-H, P-H).
-  if (resolvedAtoms.length > 24) {
+  // For very large macromolecules (> 28 heavy atoms or > 76 total atoms, e.g. β-Carotene, Squalene, or ATP),
+  // strip explicit C-H hydrogens (which are handled by skeletal implicit-H rules)
+  // while preserving all explicit 3D-SDF tetrahedral C-H hydrogens on long-chain alkanes and fatty acids
+  // (such as hexadecane C16H34, octadecane C18H38, eicosane C20H42, palmitic acid C16H32O2, stearic acid C18H36O2, oleic acid C18H34O2)
+  // as well as polycyclic aromatics and cages up to Coronene (C24H12).
+  const rawHeavyCount = resolvedAtoms.filter((a) => a.element !== 'H').length;
+  if (rawHeavyCount > 28 || resolvedAtoms.length > 76) {
     const heavyAtoms = resolvedAtoms.filter((a) => a.element !== 'H').slice(0, 60);
     const heavyIds = new Set(heavyAtoms.map((a) => a.id));
     const heteroIds = new Set(

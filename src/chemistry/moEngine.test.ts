@@ -700,6 +700,292 @@ test('Disconnected coordination complexes (hexacyanoferrate [Fe(CN)6]4-, Cr(CO)6
   assert.equal(niCO4Entry.pointGroupId, 'Td', 'Ni(CO)4 (d10) must be Tetrahedral (Td)');
 });
 
+test('Multi-center polycyclic aromatics (Coronene D6h, Triphenylene D3h, Naphthalene D2h, Phenanthrene C2v), heterocycles (Borazine D3h, Pyridine C2v), 3D cages (Cubane Oh, Adamantane Td), and polyynes (Diacetylene Dinfh, Cyanoacetylene Cinfv) classify accurately', () => {
+  // 1. Coronene (C24H12): 6 inner hub carbons at r = 1.40 Å, 6 radial spoke carbons at r = 2.80 Å, 12 outer rim carbons at r = 3.70 Å
+  const coroneneAtoms = [];
+  const coroneneBonds = [];
+  for (let k = 0; k < 6; k++) {
+    const phi = (k * Math.PI) / 3;
+    coroneneAtoms.push({
+      id: `C_in_${k}`,
+      element: 'C' as const,
+      x2d: Number((1.4 * Math.cos(phi)).toFixed(3)),
+      y2d: Number((1.4 * Math.sin(phi)).toFixed(3)),
+      x3d: Number((1.4 * Math.cos(phi)).toFixed(3)),
+      y3d: Number((1.4 * Math.sin(phi)).toFixed(3)),
+      z3d: 0,
+    });
+    coroneneAtoms.push({
+      id: `C_sp_${k}`,
+      element: 'C' as const,
+      x2d: Number((2.8 * Math.cos(phi)).toFixed(3)),
+      y2d: Number((2.8 * Math.sin(phi)).toFixed(3)),
+      x3d: Number((2.8 * Math.cos(phi)).toFixed(3)),
+      y3d: Number((2.8 * Math.sin(phi)).toFixed(3)),
+      z3d: 0,
+    });
+    for (const delta of [-Math.PI / 9, Math.PI / 9]) {
+      const tag = delta < 0 ? 'a' : 'b';
+      const ang = phi + delta;
+      coroneneAtoms.push({
+        id: `C_out_${k}_${tag}`,
+        element: 'C' as const,
+        x2d: Number((3.7 * Math.cos(ang)).toFixed(3)),
+        y2d: Number((3.7 * Math.sin(ang)).toFixed(3)),
+        x3d: Number((3.7 * Math.cos(ang)).toFixed(3)),
+        y3d: Number((3.7 * Math.sin(ang)).toFixed(3)),
+        z3d: 0,
+      });
+    }
+  }
+  for (let k = 0; k < 6; k++) {
+    const next = (k + 1) % 6;
+    coroneneBonds.push(
+      { id: `b_in_${k}`, source: `C_in_${k}`, target: `C_in_${next}`, order: (k % 2 === 0 ? 2 : 1) as 1 | 2 },
+      { id: `b_rad_${k}`, source: `C_in_${k}`, target: `C_sp_${k}`, order: 1 as const },
+      { id: `b_sp_b_${k}`, source: `C_sp_${k}`, target: `C_out_${k}_b`, order: (k % 2 === 0 ? 1 : 2) as 1 | 2 },
+      { id: `b_rim_${k}`, source: `C_out_${k}_b`, target: `C_out_${next}_a`, order: (k % 2 === 0 ? 2 : 1) as 1 | 2 },
+      { id: `b_sp_a_${next}`, source: `C_out_${next}_a`, target: `C_sp_${next}`, order: (next % 2 === 0 ? 2 : 1) as 1 | 2 }
+    );
+  }
+  assert.equal(detectPointGroup(coroneneAtoms, coroneneBonds), 'D6h', 'Coronene (C24H12) must be D6h');
+  const coroneneEntry = analyzeMolecularGraph(coroneneAtoms, coroneneBonds, { customName: 'Coronene' });
+  assert.equal(coroneneEntry.pointGroupId, 'D6h');
+  assert.equal(coroneneEntry.formula, 'C24H12');
+  const coroneneHomo = coroneneEntry.molecularOrbitals.find((m) => m.isHOMO)!;
+  assert.equal(coroneneHomo.irrepId, 'E2u', 'Coronene (24π e-) HOMO must have doubly degenerate e2u symmetry');
 
+  // 2. Borazine (B3N3H6, inorganic benzene): alternating B and N hexagon -> D3h (not D6h or Cs)
+  const borazineAtoms = [];
+  const borazineBonds = [];
+  for (let k = 0; k < 6; k++) {
+    const phi = (k * Math.PI) / 3;
+    const el = (k % 2 === 0 ? 'B' : 'N') as 'B' | 'N';
+    borazineAtoms.push({
+      id: `${el}${k + 1}`,
+      element: el,
+      x2d: Number((1.44 * Math.cos(phi)).toFixed(3)),
+      y2d: Number((1.44 * Math.sin(phi)).toFixed(3)),
+      x3d: Number((1.44 * Math.cos(phi)).toFixed(3)),
+      y3d: Number((1.44 * Math.sin(phi)).toFixed(3)),
+      z3d: 0,
+    });
+  }
+  for (let k = 0; k < 6; k++) {
+    const a1 = borazineAtoms[k].id;
+    const a2 = borazineAtoms[(k + 1) % 6].id;
+    borazineBonds.push({ id: `bb_${k}`, source: a1, target: a2, order: 1 as const });
+  }
+  assert.equal(detectPointGroup(borazineAtoms, borazineBonds), 'D3h', 'Borazine (B3N3H6) must be D3h');
 
+  // 3. Naphthalene (C10H8): two fused benzene rings -> D2h
+  const naphAtoms = [
+    { id: 'C1', element: 'C' as const, x2d: 0, y2d: 0.71, x3d: 0, y3d: 0.71, z3d: 0 },
+    { id: 'C2', element: 'C' as const, x2d: 0, y2d: -0.71, x3d: 0, y3d: -0.71, z3d: 0 },
+    { id: 'C3', element: 'C' as const, x2d: 1.23, y2d: 1.4, x3d: 1.23, y3d: 1.4, z3d: 0 },
+    { id: 'C4', element: 'C' as const, x2d: 2.45, y2d: 0.71, x3d: 2.45, y3d: 0.71, z3d: 0 },
+    { id: 'C5', element: 'C' as const, x2d: 2.45, y2d: -0.71, x3d: 2.45, y3d: -0.71, z3d: 0 },
+    { id: 'C6', element: 'C' as const, x2d: 1.23, y2d: -1.4, x3d: 1.23, y3d: -1.4, z3d: 0 },
+    { id: 'C7', element: 'C' as const, x2d: -1.23, y2d: 1.4, x3d: -1.23, y3d: 1.4, z3d: 0 },
+    { id: 'C8', element: 'C' as const, x2d: -2.45, y2d: 0.71, x3d: -2.45, y3d: 0.71, z3d: 0 },
+    { id: 'C9', element: 'C' as const, x2d: -2.45, y2d: -0.71, x3d: -2.45, y3d: -0.71, z3d: 0 },
+    { id: 'C10', element: 'C' as const, x2d: -1.23, y2d: -1.4, x3d: -1.23, y3d: -1.4, z3d: 0 },
+  ];
+  const naphBonds = [
+    { id: 'nb1', source: 'C1', target: 'C2', order: 2 as const },
+    { id: 'nb2', source: 'C1', target: 'C3', order: 1 as const },
+    { id: 'nb3', source: 'C3', target: 'C4', order: 2 as const },
+    { id: 'nb4', source: 'C4', target: 'C5', order: 1 as const },
+    { id: 'nb5', source: 'C5', target: 'C6', order: 2 as const },
+    { id: 'nb6', source: 'C6', target: 'C2', order: 1 as const },
+    { id: 'nb7', source: 'C1', target: 'C7', order: 1 as const },
+    { id: 'nb8', source: 'C7', target: 'C8', order: 2 as const },
+    { id: 'nb9', source: 'C8', target: 'C9', order: 1 as const },
+    { id: 'nb10', source: 'C9', target: 'C10', order: 2 as const },
+    { id: 'nb11', source: 'C10', target: 'C2', order: 1 as const },
+  ];
+  assert.equal(detectPointGroup(naphAtoms, naphBonds), 'D2h', 'Naphthalene (C10H8) must be D2h');
 
+  // 4. Pyridine (C5H5N): 1 N + 5 C hexagon -> C2v
+  const pyrAtoms = borazineAtoms.map((a, idx) => ({
+    ...a,
+    id: idx === 0 ? 'N1' : `C${idx}`,
+    element: (idx === 0 ? 'N' : 'C') as 'N' | 'C',
+  }));
+  const pyrBonds = borazineBonds.map((b, idx) => ({
+    ...b,
+    source: pyrAtoms[idx].id,
+    target: pyrAtoms[(idx + 1) % 6].id,
+  }));
+  assert.equal(detectPointGroup(pyrAtoms, pyrBonds), 'C2v', 'Pyridine (C5H5N) must be C2v');
+
+  // 5. Cubane (C8H8): 8 vertices of a cube at (±0.78, ±0.78, ±0.78) -> Oh
+  const cubaneAtoms = [];
+  const cubaneBonds = [];
+  let cIdx = 1;
+  for (const sx of [-0.78, 0.78]) {
+    for (const sy of [-0.78, 0.78]) {
+      for (const sz of [-0.78, 0.78]) {
+        cubaneAtoms.push({
+          id: `C${cIdx++}`,
+          element: 'C' as const,
+          x2d: sx,
+          y2d: sy,
+          x3d: sx,
+          y3d: sy,
+          z3d: sz,
+        });
+      }
+    }
+  }
+  for (let i = 0; i < cubaneAtoms.length; i++) {
+    for (let j = i + 1; j < cubaneAtoms.length; j++) {
+      const a = cubaneAtoms[i];
+      const b = cubaneAtoms[j];
+      if (Math.abs(Math.hypot(a.x3d - b.x3d, a.y3d - b.y3d, a.z3d - b.z3d) - 1.56) < 0.05) {
+        cubaneBonds.push({ id: `cb_${i}_${j}`, source: a.id, target: b.id, order: 1 as const });
+      }
+    }
+  }
+  assert.equal(detectPointGroup(cubaneAtoms, cubaneBonds), 'Oh', 'Cubane (C8H8) must be Oh');
+
+  // 6. White Phosphorus (P4) tetrahedral cage -> Td
+  const p4Atoms = [
+    { id: 'P1', element: 'P' as const, x2d: 0.78, y2d: 0.78, x3d: 0.78, y3d: 0.78, z3d: 0.78 },
+    { id: 'P2', element: 'P' as const, x2d: -0.78, y2d: -0.78, x3d: -0.78, y3d: -0.78, z3d: 0.78 },
+    { id: 'P3', element: 'P' as const, x2d: -0.78, y2d: 0.78, x3d: -0.78, y3d: 0.78, z3d: -0.78 },
+    { id: 'P4', element: 'P' as const, x2d: 0.78, y2d: -0.78, x3d: 0.78, y3d: -0.78, z3d: -0.78 },
+  ];
+  const p4Bonds = [
+    { id: 'pb1', source: 'P1', target: 'P2', order: 1 as const },
+    { id: 'pb2', source: 'P1', target: 'P3', order: 1 as const },
+    { id: 'pb3', source: 'P1', target: 'P4', order: 1 as const },
+    { id: 'pb4', source: 'P2', target: 'P3', order: 1 as const },
+    { id: 'pb5', source: 'P2', target: 'P4', order: 1 as const },
+    { id: 'pb6', source: 'P3', target: 'P4', order: 1 as const },
+  ];
+  assert.equal(detectPointGroup(p4Atoms, p4Bonds), 'Td', 'P4 tetrahedral cage must be Td');
+
+  // 7. Linear polyatomics: Diacetylene (C4H2 -> Dinfh) and Cyanoacetylene (HC3N -> Cinfv)
+  const c4h2Atoms = [
+    { id: 'H1', element: 'H' as const, x2d: -3.0, y2d: 0, x3d: -3.0, y3d: 0, z3d: 0 },
+    { id: 'C1', element: 'C' as const, x2d: -1.9, y2d: 0, x3d: -1.9, y3d: 0, z3d: 0 },
+    { id: 'C2', element: 'C' as const, x2d: -0.7, y2d: 0, x3d: -0.7, y3d: 0, z3d: 0 },
+    { id: 'C3', element: 'C' as const, x2d: 0.7, y2d: 0, x3d: 0.7, y3d: 0, z3d: 0 },
+    { id: 'C4', element: 'C' as const, x2d: 1.9, y2d: 0, x3d: 1.9, y3d: 0, z3d: 0 },
+    { id: 'H2', element: 'H' as const, x2d: 3.0, y2d: 0, x3d: 3.0, y3d: 0, z3d: 0 },
+  ];
+  const c4h2Bonds = [
+    { id: 'db1', source: 'H1', target: 'C1', order: 1 as const },
+    { id: 'db2', source: 'C1', target: 'C2', order: 3 as const },
+    { id: 'db3', source: 'C2', target: 'C3', order: 1 as const },
+    { id: 'db4', source: 'C3', target: 'C4', order: 3 as const },
+    { id: 'db5', source: 'C4', target: 'H2', order: 1 as const },
+  ];
+  assert.equal(detectPointGroup(c4h2Atoms, c4h2Bonds), 'Dinfh', 'Diacetylene (C4H2) must be Dinfh');
+
+  const hc3nAtoms = c4h2Atoms.slice(0, 5).map((a, idx) => (idx === 4 ? { ...a, id: 'N1', element: 'N' as const } : a));
+  const hc3nBonds = [
+    { id: 'hb1', source: 'H1', target: 'C1', order: 1 as const },
+    { id: 'hb2', source: 'C1', target: 'C2', order: 1 as const },
+    { id: 'hb3', source: 'C2', target: 'C3', order: 1 as const },
+    { id: 'hb4', source: 'C3', target: 'N1', order: 3 as const },
+  ];
+  hc3nBonds[1].order = 3;
+  assert.equal(detectPointGroup(hc3nAtoms, hc3nBonds), 'Cinfv', 'Cyanoacetylene (HC3N) must be Cinfv');
+});
+
+test('Long-chain alkanes (dodecane, hexadecane, eicosane), fatty acids (stearic acid), branched terpenoids (pristane), and cycloalkanes (cyclohexane) reconstruct true 3D tetrahedral sp3 carbon geometry (~109.5°)', async () => {
+  const { parseChemicalInputToGraph } = await import('./moEngine.ts');
+
+  const computeMeanTetrahedralAngles = (entry: ReturnType<typeof analyzeMolecularGraph>) => {
+    const sp3Carbons = entry.atoms.filter((a) => {
+      if (a.element !== 'C') return false;
+      const conn = entry.bonds.filter((b) => b.source === a.id || b.target === a.id);
+      return conn.length === 4 && conn.every((b) => b.order === 1);
+    });
+    const hchAngles: number[] = [];
+    const cccAngles: number[] = [];
+    for (const c of sp3Carbons) {
+      const nbs = entry.bonds
+        .filter((b) => b.source === c.id || b.target === c.id)
+        .map((b) => entry.atoms.find((x) => x.id === (b.source === c.id ? b.target : b.source))!);
+      const hNbs = nbs.filter((x) => x.element === 'H');
+      const cNbs = nbs.filter((x) => x.element === 'C');
+      if (hNbs.length >= 2) {
+        const u1 = [hNbs[0].x3d - c.x3d, hNbs[0].y3d - c.y3d, hNbs[0].z3d - c.z3d];
+        const u2 = [hNbs[1].x3d - c.x3d, hNbs[1].y3d - c.y3d, hNbs[1].z3d - c.z3d];
+        const l1 = Math.hypot(u1[0], u1[1], u1[2]) || 1;
+        const l2 = Math.hypot(u2[0], u2[1], u2[2]) || 1;
+        const dot = (u1[0] * u2[0] + u1[1] * u2[1] + u1[2] * u2[2]) / (l1 * l2);
+        hchAngles.push((Math.acos(Math.max(-1, Math.min(1, dot))) * 180) / Math.PI);
+      }
+      if (cNbs.length >= 2) {
+        const u1 = [cNbs[0].x3d - c.x3d, cNbs[0].y3d - c.y3d, cNbs[0].z3d - c.z3d];
+        const u2 = [cNbs[1].x3d - c.x3d, cNbs[1].y3d - c.y3d, cNbs[1].z3d - c.z3d];
+        const l1 = Math.hypot(u1[0], u1[1], u1[2]) || 1;
+        const l2 = Math.hypot(u2[0], u2[1], u2[2]) || 1;
+        const dot = (u1[0] * u2[0] + u1[1] * u2[1] + u1[2] * u2[2]) / (l1 * l2);
+        cccAngles.push((Math.acos(Math.max(-1, Math.min(1, dot))) * 180) / Math.PI);
+      }
+    }
+    const meanHCH = hchAngles.reduce((a, b) => a + b, 0) / Math.max(1, hchAngles.length);
+    const meanCCC = cccAngles.reduce((a, b) => a + b, 0) / Math.max(1, cccAngles.length);
+    const maxCarbonZ = Math.max(...sp3Carbons.map((a) => Math.abs(a.z3d)));
+    const maxAllZ = Math.max(...entry.atoms.map((a) => Math.abs(a.z3d)));
+    return { sp3Count: sp3Carbons.length, meanHCH, meanCCC, maxCarbonZ, maxAllZ };
+  };
+
+  // 1. Dodecane (C12H26, 38 atoms) & Eicosane (C20H42, 62 atoms)
+  const dodecane = analyzeMolecularGraph(
+    parseChemicalInputToGraph('CCCCCCCCCCCC', 'SMILES')!.atoms,
+    parseChemicalInputToGraph('CCCCCCCCCCCC', 'SMILES')!.bonds
+  );
+  assert.equal(dodecane.formula, 'C12H26');
+  assert.equal(dodecane.atoms.length, 38);
+  const dodStats = computeMeanTetrahedralAngles(dodecane);
+  assert.equal(dodStats.sp3Count, 12);
+  assert.ok(dodStats.maxCarbonZ > 0.24, `Expected 3D sp3 carbon puckering > 0.24 Å, got ${dodStats.maxCarbonZ}`);
+  assert.ok(dodStats.maxAllZ > 1.2, `Expected 3D tetrahedral C-H depth > 1.2 Å, got ${dodStats.maxAllZ}`);
+  assert.ok(
+    Math.abs(dodStats.meanHCH - 109.47) < 1.0 && Math.abs(dodStats.meanCCC - 109.47) < 2.0,
+    `Expected tetrahedral ~109.5° angles in Dodecane, got HCH=${dodStats.meanHCH.toFixed(2)}°, CCC=${dodStats.meanCCC.toFixed(2)}°`
+  );
+
+  const eicosaneGraph = parseChemicalInputToGraph('CCCCCCCCCCCCCCCCCCCC', 'SMILES')!;
+  const eicosane = analyzeMolecularGraph(eicosaneGraph.atoms, eicosaneGraph.bonds);
+  assert.equal(eicosane.formula, 'C20H42');
+  assert.equal(eicosane.atoms.length, 62);
+  const eicStats = computeMeanTetrahedralAngles(eicosane);
+  assert.equal(eicStats.sp3Count, 20);
+  assert.ok(Math.abs(eicStats.meanHCH - 109.47) < 1.0 && Math.abs(eicStats.meanCCC - 109.47) < 2.0);
+
+  // 2. Stearic Acid (C18H36O2, 56 atoms): 17 sp3 chain carbons + 1 sp2 carboxylic acid carbon
+  const stearicGraph = parseChemicalInputToGraph('CCCCCCCCCCCCCCCCCC(=O)O', 'SMILES')!;
+  const stearic = analyzeMolecularGraph(stearicGraph.atoms, stearicGraph.bonds);
+  assert.equal(stearic.formula, 'C18H36O2');
+  assert.equal(stearic.atoms.length, 56);
+  const stStats = computeMeanTetrahedralAngles(stearic);
+  assert.equal(stStats.sp3Count, 17, 'Expected 17 sp3 alkyl carbons and 1 sp2 carbonyl carbon in Stearic Acid');
+  assert.ok(stStats.maxAllZ > 1.2 && Math.abs(stStats.meanHCH - 109.47) < 1.0);
+
+  // 3. Cyclohexane (C1CCCCC1, C6H12, 18 atoms): 3D chair conformation with ~109.5° CCC and HCH angles
+  const chxGraph = parseChemicalInputToGraph('C1CCCCC1', 'SMILES')!;
+  const chx = analyzeMolecularGraph(chxGraph.atoms, chxGraph.bonds);
+  assert.equal(chx.formula, 'C6H12');
+  assert.equal(chx.atoms.length, 18);
+  const chxStats = computeMeanTetrahedralAngles(chx);
+  assert.equal(chxStats.sp3Count, 6);
+  assert.ok(
+    Math.abs(chxStats.meanCCC - 109.47) < 1.5 && Math.abs(chxStats.meanHCH - 109.47) < 1.0,
+    `Expected 3D chair cyclohexane ~109.5° angles, got CCC=${chxStats.meanCCC.toFixed(2)}°, HCH=${chxStats.meanHCH.toFixed(2)}°`
+  );
+
+  // 4. Branched isoprenoid chain Pristane (C19H40, 59 atoms): methyl branches project out of the plane (maxCarbonZ > 1.0 Å)
+  const pristaneGraph = parseChemicalInputToGraph('CC(C)CCCC(C)CCCC(C)CCCC(C)C', 'SMILES')!;
+  const pristane = analyzeMolecularGraph(pristaneGraph.atoms, pristaneGraph.bonds);
+  assert.equal(pristane.formula, 'C19H40');
+  const prStats = computeMeanTetrahedralAngles(pristane);
+  assert.ok(prStats.maxCarbonZ > 1.0, `Expected out-of-plane tetrahedral methyl branches > 1.0 Å, got ${prStats.maxCarbonZ}`);
+  assert.ok(Math.abs(prStats.meanHCH - 109.47) < 1.0);
+});
