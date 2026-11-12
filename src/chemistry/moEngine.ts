@@ -89,6 +89,24 @@ export function getImplicitHydrogenCountForAtom(
     return 0;
   }
 
+  // Alkene (η²-C2H4) or cyclopentadienyl (η⁵-C5H5) carbon π-coordinated to a transition metal
+  // retains its full organic C-H count (ignoring the dative M–C π-coordination bond)
+  const nonMetalBonds = connected.filter((b) => {
+    const otherId = b.source === atom.id ? b.target : b.source;
+    const other = atoms.find((x) => x.id === otherId);
+    return !(other && (isTransitionMetal(other.element) || isLanthanide(other.element)));
+  });
+  const hasCCBond = nonMetalBonds.some((b) => {
+    const otherId = b.source === atom.id ? b.target : b.source;
+    const other = atoms.find((x) => x.id === otherId);
+    return other?.element === 'C';
+  });
+  if (isBondedToMetal && hasCCBond) {
+    const nonMetalBoSum = nonMetalBonds.reduce((sum, b) => sum + b.order, 0);
+    const chgPenalty = atom.formalCharge ? Math.abs(atom.formalCharge) : 0;
+    return Math.max(0, 4 - nonMetalBoSum - chgPenalty);
+  }
+
   const bondOrderSum = connected.reduce((sum, b) => sum + b.order, 0);
   return Math.max(0, 4 - bondOrderSum);
 }
@@ -129,9 +147,10 @@ const MAIN_GROUP_COORD_CENTERS = new Set<ElementSymbol>([
 
 /**
  * Resolves missing coordinate covalent (dative M–L) bonds in coordination complexes
- * where PubChem V2000 SDFs or disconnected SMILES encode ligands (`[C-]#N`, `[C-]#[O+]`,
- * `[C]=O`, `NH3`, `Cl-`, etc.) as separate unconnected fragments around a central metal
- * or hypervalent coordination center, and strips isolated spectator alkali/alkaline-earth counterions.
+ * where PubChem V2000 SDFs or disconnected SMILES encode monodentate, bidentate/chelating,
+ * or η⁵/η² π-ligands (`PPh3`, `PEt3`, `bpy`, `en`, `acac-`, `C2O4(2-)`, `[C-]#N`, `[C-]#[O+]`,
+ * `NH3`, `Cl-`, `C5H5-`, `C2H4`, etc.) as separate unconnected fragments around a central metal
+ * or hypervalent coordination center, and strips isolated spectator counterions and lattice waters.
  */
 export function resolveCoordinationBonds(
   rawAtoms: AtomNode[],
@@ -174,15 +193,64 @@ export function resolveCoordinationBonds(
     return comps;
   };
 
+  const completeEta2AlkeneHapticity = (
+    atomList: AtomNode[],
+    bondList: BondEdge[]
+  ): BondEdge[] => {
+    const outBonds = [...bondList];
+    const areBonded = (id1: string, id2: string) =>
+      outBonds.some(
+        (b) => (b.source === id1 && b.target === id2) || (b.source === id2 && b.target === id1)
+      );
+    for (const m of atomList) {
+      if (!isTransitionMetal(m.element) && !isLanthanide(m.element)) continue;
+      const mBonds = outBonds.filter((b) => b.source === m.id || b.target === m.id);
+      for (const mb of mBonds) {
+        const c1Id = mb.source === m.id ? mb.target : mb.source;
+        const c1 = atomList.find((a) => a.id === c1Id);
+        if (!c1 || c1.element !== 'C') continue;
+        // Find any C1=C2 double bond where C2 is not yet bonded to m (and C1, C2 are not in a 6-membered aryl ring)
+        const ccDouble = outBonds.find((b) => {
+          if (b.order !== 2) return false;
+          const otherId = b.source === c1.id ? b.target : b.target === c1.id ? b.source : null;
+          if (!otherId || areBonded(m.id, otherId)) return false;
+          const c2 = atomList.find((a) => a.id === otherId);
+          if (!c2 || c2.element !== 'C') return false;
+          const c1HeavyNbs = outBonds
+            .filter((eb) => eb.source === c1.id || eb.target === c1.id)
+            .map((eb) => atomList.find((x) => x.id === (eb.source === c1.id ? eb.target : eb.source)))
+            .filter((x) => x && x.element !== 'H' && x.id !== m.id);
+          const c2HeavyNbs = outBonds
+            .filter((eb) => eb.source === c2.id || eb.target === c2.id)
+            .map((eb) => atomList.find((x) => x.id === (eb.source === c2.id ? eb.target : eb.source)))
+            .filter((x) => x && x.element !== 'H' && x.id !== m.id);
+          return c1HeavyNbs.length <= 2 && c2HeavyNbs.length <= 2;
+        });
+        if (ccDouble) {
+          const c2Id = ccDouble.source === c1.id ? ccDouble.target : ccDouble.source;
+          if (!areBonded(m.id, c2Id)) {
+            outBonds.push({
+              id: `b_eta2_${outBonds.length + 1}`,
+              source: m.id,
+              target: c2Id,
+              order: 1,
+            });
+          }
+        }
+      }
+    }
+    return outBonds;
+  };
+
   let atoms = rawAtoms.map((a) => ({ ...a }));
   let bonds = rawBonds.map((b) => ({ ...b }));
   let comps = getComponents(atoms, bonds);
 
   if (comps.length <= 1) {
-    return { atoms, bonds };
+    return { atoms, bonds: completeEta2AlkeneHapticity(atoms, bonds) };
   }
 
-  // Strip isolated group-1 / group-2 spectator counterions (e.g. 4 K+ in K4[Fe(CN)6] or 2 Na+ in Na2[Fe(CN)5NO])
+  // Strip isolated group-1 / group-2 spectator counterions (e.g. 4 K+ in K4[Fe(CN)6], 3 K+ in K3[Fe(C2O4)3], 2 Na+ in Na2[Fe(CN)5NO])
   if (stripSpectatorCounterions && atoms.length > 2) {
     const hasNonSpectatorCore = atoms.some(
       (a) => !SPECTATOR_COUNTERIONS.has(a.element) && a.element !== 'H'
@@ -198,7 +266,7 @@ export function resolveCoordinationBonds(
         bonds = bonds.filter((b) => !spectatorIds.has(b.source) && !spectatorIds.has(b.target));
         comps = getComponents(atoms, bonds);
         if (comps.length <= 1) {
-          return { atoms, bonds };
+          return { atoms, bonds: completeEta2AlkeneHapticity(atoms, bonds) };
         }
       }
     }
@@ -245,29 +313,38 @@ export function resolveCoordinationBonds(
     return Math.hypot(a.x2d - centerAtom.x2d, a.y2d - centerAtom.y2d);
   };
 
-  for (const comp of comps) {
-    if (comp.some((a) => a.id === centerAtom.id)) continue;
-    if (comp.length > 8) continue;
+  const isNeutralWaterComp = (comp: AtomNode[]): boolean => {
+    const heavy = comp.filter((a) => a.element !== 'H');
+    if (heavy.length !== 1 || heavy[0].element !== 'O') return false;
+    if ((heavy[0].formalCharge ?? 0) !== 0) return false;
+    const hCount = comp.length - 1;
+    // Bare uncharged O (from SMILES `.O.`) or H2O (O + 2 H)
+    return hCount === 0 || hCount === 2;
+  };
 
-    let donor: AtomNode = comp[0];
+  /**
+   * Identifies the σ/π donor atom(s) in a ligand component (1 for monodentate ligands like
+   * -Cl, -CN, -CO, -NO, -NH3, -PPh3, -PEt3, -SR, pyridine, C5H5, C2H4; 2 for bidentate chelates
+   * like ethylenediamine, 2,2'-bipyridine, acetylacetonate, oxalate, dicarboxylates, dimethylglyoximate).
+   */
+  const findLigandDonors = (comp: AtomNode[]): { donors: AtomNode[]; deprotonateHIds: string[] } => {
     if (comp.length === 1) {
-      donor = comp[0];
-    } else if (comp.length === 2) {
+      return { donors: [comp[0]], deprotonateHIds: [] };
+    }
+    if (comp.length === 2) {
       const [a, b] = comp;
       if (a.element === 'H' && b.element !== 'H') {
-        donor = b;
-      } else if (b.element === 'H' && a.element !== 'H') {
-        donor = a;
-      } else if (
+        return { donors: [b], deprotonateHIds: [] };
+      }
+      if (b.element === 'H' && a.element !== 'H') {
+        return { donors: [a], deprotonateHIds: [] };
+      }
+      if (
         (a.element === 'C' && (b.element === 'N' || b.element === 'O' || b.element === 'S')) ||
         (b.element === 'C' && (a.element === 'N' || a.element === 'O' || a.element === 'S'))
       ) {
-        // Cyanide (-C≡N), Carbonyl (-C≡O / -C=O), Thiocarbonyl (-C≡S): Carbon is always the σ-donor
         const cAtom = a.element === 'C' ? a : b;
         const heteroAtom = a.element === 'C' ? b : a;
-        donor = cAtom;
-
-        // Upgrade divalent carbonyl [C]=O in PubChem SDFs (e.g. Fe(CO)5) to standard C≡O triple bond
         if (heteroAtom.element === 'O') {
           bonds = bonds.map((edge) =>
             (edge.source === cAtom.id && edge.target === heteroAtom.id) ||
@@ -276,27 +353,377 @@ export function resolveCoordinationBonds(
               : edge
           );
         }
-      } else if (
+        return { donors: [cAtom], deprotonateHIds: [] };
+      }
+      if (
         (a.element === 'N' && b.element === 'O') ||
         (b.element === 'N' && a.element === 'O')
       ) {
-        donor = a.element === 'N' ? a : b;
-      } else {
-        donor = distToCenter(a) <= distToCenter(b) ? a : b;
+        return { donors: [a.element === 'N' ? a : b], deprotonateHIds: [] };
       }
-    } else {
-      const nonH = comp.filter((a) => a.element !== 'H');
-      const pool = nonH.length > 0 ? nonH : comp;
-      donor = [...pool].sort((a, b) => distToCenter(a) - distToCenter(b))[0];
+      return {
+        donors: [distToCenter(a) <= distToCenter(b) ? a : b],
+        deprotonateHIds: [],
+      };
     }
 
-    bonds.push({
-      id: `b_coord_${bonds.length + 1}`,
-      source: centerAtom.id,
-      target: donor.id,
-      order: 1,
+    const heavy = comp.filter((a) => a.element !== 'H');
+    if (heavy.length === 0) return { donors: [comp[0]], deprotonateHIds: [] };
+    if (heavy.length === 1) return { donors: [heavy[0]], deprotonateHIds: [] };
+
+    const getConn = (a: AtomNode) =>
+      bonds.filter((b) => b.source === a.id || b.target === a.id);
+    const getHeavyNbs = (a: AtomNode) =>
+      getConn(a)
+        .map((b) => comp.find((x) => x.id === (b.source === a.id ? b.target : b.source)))
+        .filter((x): x is AtomNode => Boolean(x && x.element !== 'H'));
+    const getBoSum = (a: AtomNode) => getConn(a).reduce((s, b) => s + b.order, 0);
+
+    // 1. Trivalent Group 15 Phosphine / Arsine / Stibine donors (PPh3, PEt3, PMe3, PF3, dppe, BINAP)
+    const pDonors = heavy.filter(
+      (a) =>
+        (a.element === 'P' || a.element === 'As' || a.element === 'Sb') &&
+        getHeavyNbs(a).length <= 3 &&
+        getBoSum(a) <= 3
+    );
+    if (pDonors.length > 0) {
+      return { donors: pDonors.slice(0, 2), deprotonateHIds: [] };
+    }
+
+    // 2. Low-valent Group 16 Thiolate / Thioether / Selenoether donors (e.g. [S-] in Auranofin)
+    const sDonors = heavy
+      .filter(
+        (a) =>
+          (a.element === 'S' || a.element === 'Se' || a.element === 'Te') &&
+          getHeavyNbs(a).length <= 2 &&
+          getBoSum(a) <= 2
+      )
+      .sort((a, b) => (a.formalCharge ?? 0) - (b.formalCharge ?? 0));
+    if (sDonors.length > 0) {
+      return { donors: sDonors.slice(0, 2), deprotonateHIds: [] };
+    }
+
+    // 3. Terminal Isocyanide (R-N#C) donor where terminal C is triple-bonded to N
+    const isocyanideCs = heavy.filter((a) => {
+      if (a.element !== 'C' || getConn(a).length !== 1) return false;
+      const b = getConn(a)[0];
+      if (b.order < 2) return false;
+      const nbId = b.source === a.id ? b.target : b.source;
+      const nb = comp.find((x) => x.id === nbId);
+      return nb?.element === 'N';
     });
+    if (isocyanideCs.length > 0) {
+      return { donors: isocyanideCs.slice(0, 2), deprotonateHIds: [] };
+    }
+
+    // 4. Lone-pair Nitrogen (N) donors (en, bpy, phen, pyridine, 1,2-diaminocyclohexane, dmgH-, RCN)
+    const nDonors = heavy.filter(
+      (a) => a.element === 'N' && getConn(a).length <= 3 && getBoSum(a) <= 3
+    );
+    if (nDonors.length > 0) {
+      return { donors: nDonors.slice(0, 2), deprotonateHIds: [] };
+    }
+
+    // 5. Oxygen (O) donors: Dicarboxylates / Oxalate (2 single-bonded carboxylate O's), β-Diketonates (acac, 2 O's), or monodentate O
+    const oAtoms = heavy.filter((a) => a.element === 'O');
+    if (oAtoms.length > 0) {
+      // Identify single-bonded carboxylate oxygens (-C(=O)-O- or -C(=O)-OH)
+      const carboxylateOs = oAtoms.filter((o) => {
+        const hvyNbs = getHeavyNbs(o);
+        if (hvyNbs.length !== 1 || hvyNbs[0].element !== 'C') return false;
+        const cAtom = hvyNbs[0];
+        const coBond = bonds.find(
+          (b) =>
+            (b.source === o.id && b.target === cAtom.id) ||
+            (b.target === o.id && b.source === cAtom.id)
+        );
+        if (!coBond || coBond.order !== 1) return false;
+        return getConn(cAtom).some((b) => {
+          if (b.id === coBond.id || b.order !== 2) return false;
+          const otherId = b.source === cAtom.id ? b.target : b.source;
+          const other = comp.find((x) => x.id === otherId);
+          return other?.element === 'O';
+        });
+      });
+
+      if (carboxylateOs.length >= 2) {
+        const chosenOs = carboxylateOs.slice(0, 2);
+        const deprotonateHIds: string[] = [];
+        for (const o of chosenOs) {
+          for (const b of getConn(o)) {
+            const otherId = b.source === o.id ? b.target : b.source;
+            const other = comp.find((x) => x.id === otherId);
+            if (other?.element === 'H') deprotonateHIds.push(other.id);
+          }
+        }
+        return { donors: chosenOs, deprotonateHIds };
+      }
+
+      if (oAtoms.length === 2) {
+        // β-diketonate (acetylacetonate acac-) chelates through both O atoms
+        return { donors: oAtoms, deprotonateHIds: [] };
+      }
+
+      const sortedOs = [...oAtoms].sort(
+        (a, b) => (a.formalCharge ?? 0) - (b.formalCharge ?? 0) || distToCenter(a) - distToCenter(b)
+      );
+      return { donors: [sortedOs[0]], deprotonateHIds: [] };
+    }
+
+    // 6. Pure Carbon π/σ ligands:
+    //    - η⁵-C5H5 in Ferrocene/Cobaltocene/Ruthenocene
+    //    - η⁶-C6H6 in Bis(benzene)chromium Cr(C6H6)2 or (C6H6)Cr(CO)3
+    //    - η⁴-C4H4 in (C4H4)Fe(CO)3
+    //    - η²,η²-chelating dienes (1,5-cyclooctadiene COD, norbornadiene NBD, 1,3-butadiene)
+    //    - monodentate η²-alkenes of any size (ethylene, propene, 1-hexene, styrene, cyclohexene, norbornene, etc.)
+    if (
+      (heavy.length === 5 || heavy.length === 6 || heavy.length === 4) &&
+      heavy.every((a) => a.element === 'C' && getHeavyNbs(a).length === 2)
+    ) {
+      const ringDoubleBonds = bonds.filter((b) => {
+        if (b.order !== 2) return false;
+        return heavy.some((x) => x.id === b.source) && heavy.some((x) => x.id === b.target);
+      });
+      const allAnionicRing = heavy.every((a) => (a.formalCharge ?? 0) < 0);
+      const explicitHCount = comp.filter((a) => a.element === 'H').length;
+      const isC6H6Ring = heavy.length === 6 && explicitHCount === 6;
+      const isC4H4Ring = heavy.length === 4 && explicitHCount === 4;
+      if (
+        heavy.length === 5 ||
+        (heavy.length === 6 && (ringDoubleBonds.length === 3 || allAnionicRing || isC6H6Ring)) ||
+        (heavy.length === 4 && (ringDoubleBonds.length >= 2 || allAnionicRing || isC4H4Ring))
+      ) {
+        // Normalize PubChem anionic / bond-order-omitted ring representations (e.g. [CH-]1[CH-][CH-][CH-][CH-][CH-]1 in Cr(C6H6)2)
+        if (allAnionicRing || isC6H6Ring || isC4H4Ring) {
+          for (const a of heavy) {
+            a.formalCharge = 0;
+          }
+          if ((heavy.length === 6 || heavy.length === 4) && ringDoubleBonds.length === 0) {
+            const nRing = heavy.length;
+            const ordered: AtomNode[] = [heavy[0]];
+            const used = new Set<string>([heavy[0].id]);
+            while (ordered.length < nRing) {
+              const last = ordered[ordered.length - 1];
+              const next = getHeavyNbs(last).find((nb) => !used.has(nb.id));
+              if (!next) break;
+              ordered.push(next);
+              used.add(next.id);
+            }
+            if (ordered.length === nRing) {
+              for (let k = 0; k < nRing; k += 2) {
+                const a1 = ordered[k];
+                const a2 = ordered[(k + 1) % nRing];
+                bonds = bonds.map((edge) =>
+                  (edge.source === a1.id && edge.target === a2.id) ||
+                  (edge.source === a2.id && edge.target === a1.id)
+                    ? { ...edge, order: 2 as const }
+                    : edge
+                );
+              }
+            }
+          }
+        }
+        return { donors: heavy, deprotonateHIds: [] };
+      }
+    }
+
+    // Check for η²-alkene or η²,η²-diene C=C double bonds (Dewar-Chatt-Duncanson coordination)
+    if (isTransitionMetal(centerAtom.element) || isLanthanide(centerAtom.element)) {
+      const ccDoubleBonds = bonds
+        .filter((b) => {
+          if (b.order !== 2) return false;
+          const a1 = comp.find((x) => x.id === b.source);
+          const a2 = comp.find((x) => x.id === b.target);
+          return Boolean(a1?.element === 'C' && a2?.element === 'C');
+        })
+        .sort((b1, b2) => {
+          const a11 = comp.find((x) => x.id === b1.source)!;
+          const a12 = comp.find((x) => x.id === b1.target)!;
+          const a21 = comp.find((x) => x.id === b2.source)!;
+          const a22 = comp.find((x) => x.id === b2.target)!;
+          return (
+            Math.min(distToCenter(a11), distToCenter(a12)) -
+            Math.min(distToCenter(a21), distToCenter(a22))
+          );
+        });
+
+      if (ccDoubleBonds.length > 0) {
+        // Distinguish non-aromatic olefinic C=C bonds from 6-membered aryl ring C=C bonds (e.g. phenyl ring in styrene)
+        const isBondInAromaticSixRing = (bond: BondEdge): boolean => {
+          const startId = bond.source;
+          const targetId = bond.target;
+          // BFS/DFS for a path of length 5 in heavy atoms from startId to targetId not using `bond`
+          const stack: { curr: string; path: string[] }[] = [{ curr: startId, path: [startId] }];
+          while (stack.length > 0) {
+            const { curr, path } = stack.pop()!;
+            if (path.length === 6) {
+              const currAtom = comp.find((x) => x.id === curr);
+              if (
+                currAtom &&
+                getHeavyNbs(currAtom).some((nb) => nb.id === targetId)
+              ) {
+                const ringSet = new Set(path);
+                const dblInRing = ccDoubleBonds.filter(
+                  (db) => ringSet.has(db.source) && ringSet.has(db.target)
+                ).length;
+                if (dblInRing >= 3) return true;
+              }
+              continue;
+            }
+            const currAtom = comp.find((x) => x.id === curr);
+            if (!currAtom) continue;
+            for (const nb of getHeavyNbs(currAtom)) {
+              if (curr === startId && nb.id === targetId) continue;
+              if (!path.includes(nb.id)) {
+                stack.push({ curr: nb.id, path: [...path, nb.id] });
+              }
+            }
+          }
+          return false;
+        };
+
+        const nonArylDoubleBonds = ccDoubleBonds.filter((b) => !isBondInAromaticSixRing(b));
+        const activeDoubleBonds =
+          nonArylDoubleBonds.length > 0 ? nonArylDoubleBonds : ccDoubleBonds;
+
+        // Calculate existing non-alkene coordination sites on centerAtom to see if chelating diene (2 sites) fits
+        const curCenterNbs = bonds
+          .filter((b) => b.source === centerAtom.id || b.target === centerAtom.id)
+          .map((b) => (b.source === centerAtom.id ? b.target : b.source));
+        const curEta2Pairs = bonds.filter(
+          (b) => curCenterNbs.includes(b.source) && curCenterNbs.includes(b.target)
+        ).length;
+        const curEffectiveSites = Math.max(0, curCenterNbs.length - curEta2Pairs);
+
+        // Chelating η²,η²-diene (e.g. 1,5-cyclooctadiene COD in Ni(COD)2 / Pt(COD)Cl2, norbornadiene NBD, 1,3-butadiene)
+        if (activeDoubleBonds.length >= 2 && curEffectiveSites <= 2) {
+          const b1 = activeDoubleBonds[0];
+          const b2 = activeDoubleBonds.find(
+            (b) =>
+              b.source !== b1.source &&
+              b.source !== b1.target &&
+              b.target !== b1.source &&
+              b.target !== b1.target
+          );
+          if (b2) {
+            const c1a = comp.find((x) => x.id === b1.source)!;
+            const c1b = comp.find((x) => x.id === b1.target)!;
+            const c2a = comp.find((x) => x.id === b2.source)!;
+            const c2b = comp.find((x) => x.id === b2.target)!;
+            return { donors: [c1a, c1b, c2a, c2b], deprotonateHIds: [] };
+          }
+        }
+
+        // Monodentate η²-alkene (ethylene, propene, 1-hexene, styrene, cyclohexene, norbornene, etc.)
+        const bestCC = activeDoubleBonds[0];
+        const c1 = comp.find((x) => x.id === bestCC.source)!;
+        const c2 = comp.find((x) => x.id === bestCC.target)!;
+        return { donors: [c1, c2], deprotonateHIds: [] };
+      }
+    }
+    const sortedHeavy = [...heavy].sort(
+      (a, b) =>
+        (a.formalCharge ?? 0) - (b.formalCharge ?? 0) ||
+        getConn(a).length - getConn(b).length ||
+        distToCenter(a) - distToCenter(b)
+    );
+    return { donors: [sortedHeavy[0]], deprotonateHIds: [] };
+  };
+
+  // Evaluate all non-center ligand components and strip uncoordinated lattice waters of hydration
+  // (e.g. .2H2O in Sodium nitroprusside dihydrate CID 11953895 or .H2O in Zeise's salt CID 71311337)
+  // when primary non-water ligands already saturate the metal's coordination sphere (4 for sq-planar, 6 for octahedral).
+  const centerNbs = bonds
+    .filter((b) => b.source === centerAtom.id || b.target === centerAtom.id)
+    .map((b) => (b.source === centerAtom.id ? b.target : b.source));
+  const eta2ExistingPairs = bonds.filter(
+    (b) => centerNbs.includes(b.source) && centerNbs.includes(b.target)
+  ).length;
+  const existingCenterDegree = Math.max(0, centerNbs.length - eta2ExistingPairs);
+  const otherComps = comps.filter((c) => !c.some((a) => a.id === centerAtom.id));
+
+  const getEffectiveCoordSites = (donors: AtomNode[]): number => {
+    if (donors.length >= 5 && donors.every((d) => d.element === 'C')) {
+      return 3;
+    }
+    if (donors.length === 4 && donors.every((d) => d.element === 'C')) {
+      return 2;
+    }
+    if (
+      donors.length === 2 &&
+      bonds.some(
+        (b) =>
+          (b.source === donors[0].id && b.target === donors[1].id) ||
+          (b.source === donors[1].id && b.target === donors[0].id)
+      )
+    ) {
+      // η²-alkene C=C occupies 1 VSEPR coordination site
+      return 1;
+    }
+    return donors.length;
+  };
+
+  if (stripSpectatorCounterions && otherComps.length >= 2) {
+    const waterComps = otherComps.filter(isNeutralWaterComp);
+    const nonWaterComps = otherComps.filter((c) => !isNeutralWaterComp(c));
+    if (waterComps.length > 0 && nonWaterComps.length > 0) {
+      const nonWaterDenticity =
+        existingCenterDegree +
+        nonWaterComps.reduce(
+          (sum, c) => sum + getEffectiveCoordSites(findLigandDonors(c).donors),
+          0
+        );
+      const targetSatCoord =
+        centerAtom.element === 'Pt' || centerAtom.element === 'Pd' || centerAtom.element === 'Au'
+          ? 4
+          : 6;
+      if (nonWaterDenticity >= targetSatCoord) {
+        const waterAtomIds = new Set(waterComps.flat().map((a) => a.id));
+        atoms = atoms.filter((a) => !waterAtomIds.has(a.id));
+        bonds = bonds.filter(
+          (b) => !waterAtomIds.has(b.source) && !waterAtomIds.has(b.target)
+        );
+        comps = getComponents(atoms, bonds);
+      }
+    }
   }
+
+  const deprotonatedIds = new Set<string>();
+  const allCoordinatedDonors: AtomNode[] = [];
+  for (const comp of comps) {
+    if (comp.some((a) => a.id === centerAtom.id)) continue;
+    const { donors, deprotonateHIds } = findLigandDonors(comp);
+    for (const hId of deprotonateHIds) deprotonatedIds.add(hId);
+    for (const donor of donors) {
+      allCoordinatedDonors.push(donor);
+      bonds.push({
+        id: `b_coord_${bonds.length + 1}`,
+        source: centerAtom.id,
+        target: donor.id,
+        order: 1,
+      });
+    }
+  }
+
+  // If centerAtom was an isolated single-atom component (e.g. [Ni] in Ni(COD)2 or [Fe] in Ferrocene / Hexacyanoferrate),
+  // place its 2D coordinates at the centroid of all coordinated donor atoms so the 2D Sketcher is centered.
+  if ((tmOrLnSingle || mainGroupSingle) && allCoordinatedDonors.length >= 2) {
+    const avgX2d =
+      allCoordinatedDonors.reduce((s, d) => s + d.x2d, 0) / allCoordinatedDonors.length;
+    const avgY2d =
+      allCoordinatedDonors.reduce((s, d) => s + d.y2d, 0) / allCoordinatedDonors.length;
+    centerAtom.x2d = Number(avgX2d.toFixed(2));
+    centerAtom.y2d = Number(avgY2d.toFixed(2));
+  }
+
+  if (deprotonatedIds.size > 0) {
+    atoms = atoms.filter((a) => !deprotonatedIds.has(a.id));
+    bonds = bonds.filter(
+      (b) => !deprotonatedIds.has(b.source) && !deprotonatedIds.has(b.target)
+    );
+  }
+
+  bonds = completeEta2AlkeneHapticity(atoms, bonds);
 
   return { atoms, bonds };
 }
@@ -314,15 +741,269 @@ export interface StarCoordinationTopology {
 }
 
 /**
+ * Determines whether a 4-coordinate transition-metal complex adopts a Square-Planar (d⁸)
+ * or Tetrahedral (d¹⁰ / weak-field 3d) coordination geometry.
+ */
+export function isFourCoordSquarePlanar(
+  centerAtom: AtomNode,
+  branches: LigandBranchInfo[],
+  charge = 0
+): boolean {
+  if (!isSquarePlanarMetal(centerAtom.element)) return false;
+  if (branches.length !== 4) return false;
+
+  const anionicCount = branches.filter((b) => {
+    if (['F', 'Cl', 'Br', 'I'].includes(b.donor.element) && b.distalAtoms.length === 0) {
+      return true;
+    }
+    if (b.sig === 'C:N') return true;
+    if ((b.donor.formalCharge ?? 0) < 0) return true;
+    return false;
+  }).length;
+
+  // Group 10 (Ni, Pd, Pt) zerovalent d10 ML4 complexes with 4 neutral L-type ligands
+  // (e.g. Ni(CO)4, Pd(PPh3)4, Pt(PPh3)4, Ni(PF3)4) are Tetrahedral (Td)!
+  if (
+    (centerAtom.element === 'Ni' ||
+      centerAtom.element === 'Pd' ||
+      centerAtom.element === 'Pt') &&
+    charge === 0 &&
+    anionicCount === 0
+  ) {
+    return false;
+  }
+
+  // 3d Ni(II) is square-planar with strong-field cyanide ([Ni(CN)4]2-), and tetrahedral with weak-field halides/phosphines (NiCl2(PPh3)2, [NiCl4]2-)
+  if (centerAtom.element === 'Ni') {
+    return branches.some((b) => b.sig === 'C:N' || b.donor.element === 'N');
+  }
+
+  // 4d/5d d8 complexes (Rh(I) in Wilkinson's catalyst [RhCl(PPh3)3], Ir(I) in Vaska's complex [IrCl(CO)(PPh3)2],
+  // Pd(II) in [PdCl2(PPh3)2], Pt(II) in Cisplatin [PtCl2(NH3)2] & [PtCl4]2-, Au(III) in [AuCl4]-) are Square Planar!
+  return true;
+}
+
+export interface ChelateLigandInfo {
+  donors: AtomNode[];
+  allAtoms: AtomNode[];
+  sig: string;
+}
+
+export interface ChelateOrSandwichTopology {
+  kind:
+    | 'metallocene_sandwich'
+    | 'bis_diene_chelate'
+    | 'mono_diene_chelate'
+    | 'piano_stool_sandwich'
+    | 'tris_bidentate_octahedral'
+    | 'square_planar_chelate';
+  centerAtom: AtomNode;
+  ligands: ChelateLigandInfo[];
+  pointGroupId: string;
+}
+
+/**
+ * Detects whether a molecular graph is:
+ * - a Metallocene / Bis-Arene Sandwich complex (e.g. Ferrocene Fe(C5H5)2 -> D5d, Bis(benzene)chromium Cr(C6H6)2 -> D6h),
+ * - a Homoleptic Bis-Diene Chelate complex (e.g. Bis(1,5-cyclooctadiene)nickel Ni(COD)2 -> D2d),
+ * - a Heteroleptic Square-Planar Diene Chelate complex (e.g. Pt(COD)Cl2, Pd(COD)Cl2, Pt(nbd)Cl2, [Rh(COD)Cl2]- -> C2v),
+ * - a Piano-Stool / Half-Sandwich complex (e.g. (C6H6)Cr(CO)3 -> C3v, (C4H4)Fe(CO)3 / (C4H6)Fe(CO)3 -> Cs),
+ * - a Tris-Bidentate Octahedral Propeller complex (e.g. [Co(en)3]3+, [Ru(bpy)3]2+, Fe(acac)3, [Fe(C2O4)3]3- -> D3), or
+ * - a 4-Coordinate Square-Planar Chelate complex (e.g. [Ni(dmgH)2] -> D2h, Oxaliplatin / Carboplatin -> C2v).
+ */
+export function analyzeChelateOrSandwichTopology(
+  atoms: AtomNode[],
+  bonds: BondEdge[]
+): ChelateOrSandwichTopology | null {
+  if (atoms.length < 7 || atoms.length > 180) return null;
+
+  const metalCandidates = atoms.filter(
+    (a) => isTransitionMetal(a.element) || isLanthanide(a.element)
+  );
+  if (metalCandidates.length !== 1) return null;
+  const centerAtom = metalCandidates[0];
+
+  const adj = new Map<string, string[]>();
+  for (const a of atoms) adj.set(a.id, []);
+  for (const b of bonds) {
+    if (adj.has(b.source) && adj.has(b.target)) {
+      adj.get(b.source)!.push(b.target);
+      adj.get(b.target)!.push(b.source);
+    }
+  }
+
+  const centerNeighborIds = new Set(adj.get(centerAtom.id) || []);
+  if (centerNeighborIds.size < 2 || centerNeighborIds.size > 12) return null;
+
+  // Partition (atoms \ {centerAtom}) into connected ligand subgraphs
+  const visited = new Set<string>([centerAtom.id]);
+  const ligands: ChelateLigandInfo[] = [];
+
+  for (const a of atoms) {
+    if (visited.has(a.id)) continue;
+    const comp: AtomNode[] = [];
+    const queue: AtomNode[] = [a];
+    visited.add(a.id);
+    while (queue.length > 0) {
+      const cur = queue.shift()!;
+      comp.push(cur);
+      for (const nbId of adj.get(cur.id) || []) {
+        if (!visited.has(nbId)) {
+          visited.add(nbId);
+          const nbAtom = atoms.find((x) => x.id === nbId);
+          if (nbAtom) queue.push(nbAtom);
+        }
+      }
+    }
+    const donors = comp.filter((x) => centerNeighborIds.has(x.id));
+    if (donors.length === 0) return null;
+    const elemSig = comp
+      .map((x) => x.element)
+      .sort()
+      .join('');
+    const donorSig = donors
+      .map((x) => x.element)
+      .sort()
+      .join('');
+    ligands.push({
+      donors,
+      allAtoms: comp,
+      sig: `${donorSig}:${elemSig}`,
+    });
+  }
+
+  // 1. Check for Metallocene / Bis-Arene Sandwich M(η⁵-C5H5)2 or M(η⁶-C6H6)2
+  if (ligands.length === 2) {
+    const isSandwichCap = (lig: ChelateLigandInfo) => {
+      const heavy = lig.allAtoms.filter((x) => x.element !== 'H');
+      return (
+        (heavy.length === 5 || heavy.length === 6) &&
+        heavy.every((x) => x.element === 'C') &&
+        lig.donors.length >= 5
+      );
+    };
+    if (isSandwichCap(ligands[0]) && isSandwichCap(ligands[1])) {
+      const n0 = ligands[0].allAtoms.filter((x) => x.element !== 'H').length;
+      const n1 = ligands[1].allAtoms.filter((x) => x.element !== 'H').length;
+      const pgId = n0 === 6 && n1 === 6 ? 'D6h' : n0 === 5 && n1 === 5 ? 'D5d' : 'Cs';
+      return {
+        kind: 'metallocene_sandwich',
+        centerAtom,
+        ligands,
+        pointGroupId: pgId,
+      };
+    }
+  }
+
+  // 2. Check for Chelating η²,η²-Diene Complexes (e.g. Ni(COD)2 -> D2d, Pt(COD)Cl2 / Pd(COD)Cl2 / Pt(nbd)Cl2 -> C2v)
+  const isDieneChelate = (lig: ChelateLigandInfo) =>
+    lig.donors.length === 4 && lig.donors.every((d) => d.element === 'C');
+
+  if (ligands.length === 2 && ligands.every(isDieneChelate)) {
+    return {
+      kind: 'bis_diene_chelate',
+      centerAtom,
+      ligands,
+      pointGroupId: ligands[0].sig === ligands[1].sig ? 'D2d' : 'C2v',
+    };
+  }
+
+  if (
+    ligands.length === 3 &&
+    ligands.filter(isDieneChelate).length === 1 &&
+    ligands.filter((l) => l.donors.length === 1).length === 2
+  ) {
+    const sortedLigands = [...ligands].sort((a, b) => b.donors.length - a.donors.length);
+    const pgId = sortedLigands[1].sig === sortedLigands[2].sig ? 'C2v' : 'Cs';
+    return {
+      kind: 'mono_diene_chelate',
+      centerAtom,
+      ligands: sortedLigands,
+      pointGroupId: pgId,
+    };
+  }
+
+  // 3. Check for Piano-Stool / Half-Sandwich Complex M(ηⁿ-ring/diene)L3 (e.g. (C6H6)Cr(CO)3, (C4H4)Fe(CO)3, (C4H6)Fe(CO)3)
+  if (
+    ligands.length === 4 &&
+    ligands.filter((l) => l.donors.length >= 4 && l.donors.every((d) => d.element === 'C'))
+      .length === 1 &&
+    ligands.filter((l) => l.donors.length === 1).length === 3
+  ) {
+    const sortedLigands = [...ligands].sort((a, b) => b.donors.length - a.donors.length);
+    const capHeavy = sortedLigands[0].allAtoms.filter((x) => x.element !== 'H');
+    const legsIdentical =
+      sortedLigands[1].sig === sortedLigands[2].sig &&
+      sortedLigands[2].sig === sortedLigands[3].sig;
+    const pgId = capHeavy.length === 6 && legsIdentical ? 'C3v' : 'Cs';
+    return {
+      kind: 'piano_stool_sandwich',
+      centerAtom,
+      ligands: sortedLigands,
+      pointGroupId: pgId,
+    };
+  }
+
+  // Require at least one true bidentate chelate ligand (donors.length === 2 and donors are not directly bonded as an η²-alkene)
+  const isTrueBidentateChelate = (l: ChelateLigandInfo) =>
+    l.donors.length === 2 &&
+    !bonds.some(
+      (b) =>
+        (b.source === l.donors[0].id && b.target === l.donors[1].id) ||
+        (b.source === l.donors[1].id && b.target === l.donors[0].id)
+    );
+  const hasBidentate = ligands.some(isTrueBidentateChelate);
+  if (!hasBidentate) return null;
+
+  // 4. Check for Tris-Bidentate Octahedral Propeller M(L-L)3 (3 bidentate ligands = 6 donor bonds)
+  if (
+    ligands.length === 3 &&
+    ligands.every(isTrueBidentateChelate) &&
+    centerNeighborIds.size === 6
+  ) {
+    const uniqueSigs = new Set(ligands.map((l) => l.sig));
+    return {
+      kind: 'tris_bidentate_octahedral',
+      centerAtom,
+      ligands,
+      pointGroupId: uniqueSigs.size === 1 ? 'D3' : 'Cs',
+    };
+  }
+
+  // 5. Check for 4-Coordinate Square-Planar Chelate (e.g. [Ni(dmgH)2] -> D2h, Oxaliplatin / Carboplatin -> C2v)
+  if (centerNeighborIds.size === 4 && (ligands.length === 2 || ligands.length === 3)) {
+    const valid2 = ligands.length === 2 && ligands.every(isTrueBidentateChelate);
+    const valid3 =
+      ligands.length === 3 &&
+      ligands.filter(isTrueBidentateChelate).length === 1 &&
+      ligands.filter((l) => l.donors.length === 1).length === 2;
+    if (valid2 || valid3) {
+      const sortedLigands = [...ligands].sort((a, b) => b.donors.length - a.donors.length);
+      const pgId =
+        valid2 && ligands[0].sig === ligands[1].sig ? 'D2h' : 'C2v';
+      return {
+        kind: 'square_planar_chelate',
+        centerAtom,
+        ligands: sortedLigands,
+        pointGroupId: pgId,
+      };
+    }
+  }
+
+  return null;
+}
+
+/**
  * Detects whether a molecular graph has a single central coordination / VSEPR atom
  * surrounded by nLig ∈ [2, 6] mutually disjoint terminal ligand branches (supporting both
- * monoatomic ligands like -Cl, -F, -H and polyatomic ligands like -C≡N, -C≡O, -NO, -NH3, -OH2).
+ * monoatomic ligands like -Cl, -F, -H and polyatomic/complex ligands like -C≡N, -C≡O, -NO,
+ * -NH3, -OH2, -PPh3, -PEt3, pyridine, -SR, and Dewar-Chatt-Duncanson η²-alkenes like η²-C2H4).
  */
 export function analyzeStarCoordinationTopology(
   atoms: AtomNode[],
   bonds: BondEdge[]
 ): StarCoordinationTopology | null {
-  if (atoms.length < 3 || atoms.length > 32) return null;
+  if (atoms.length < 3 || atoms.length > 200) return null;
 
   const adj = new Map<string, string[]>();
   for (const a of atoms) adj.set(a.id, []);
@@ -337,7 +1018,8 @@ export function analyzeStarCoordinationTopology(
   const candidates = atoms
     .filter((a) => {
       const deg = (adj.get(a.id) || []).length;
-      return deg >= 2 && deg <= 6;
+      const isTmOrLn = isTransitionMetal(a.element) || isLanthanide(a.element);
+      return deg >= 2 && deg <= (isTmOrLn ? 8 : 6);
     })
     .sort((a, b) => {
       const aMetal = isTransitionMetal(a.element) || isLanthanide(a.element) ? 1 : 0;
@@ -347,15 +1029,56 @@ export function analyzeStarCoordinationTopology(
     });
 
   for (const centerAtom of candidates) {
+    const isMetalCenter =
+      isTransitionMetal(centerAtom.element) || isLanthanide(centerAtom.element);
+    if (!isMetalCenter && atoms.length > 32) continue;
+
+    // Exclude metallocene sandwich complexes (which use analyzeChelateOrSandwichTopology)
     const donorIds = adj.get(centerAtom.id) || [];
-    const nLig = donorIds.length;
-    if (nLig < 2 || nLig > 6) continue;
+    if (donorIds.length < 2 || donorIds.length > (isMetalCenter ? 8 : 6)) continue;
+
+    // Identify Dewar-Chatt-Duncanson η²-alkene donor pairs (two C neighbors of centerAtom directly bonded via C=C)
+    // so both alkene carbons merge into a single η² coordination branch (supports 1, 2, or 3 η²-alkene ligands such as Ni(C2H4)3).
+    const eta2SecondaryIds = new Set<string>();
+    if (isMetalCenter) {
+      const carbonDonorIds = donorIds.filter(
+        (id) => atoms.find((a) => a.id === id)?.element === 'C'
+      );
+      const cDonorSet = new Set(carbonDonorIds);
+      // Exclude η⁵-Cp / η⁶-arene sandwich rings where every carbon donor is bonded to 2 other carbon donors in a single ring
+      const isContinuousDonorRing =
+        carbonDonorIds.length >= 4 &&
+        carbonDonorIds.every(
+          (id) => (adj.get(id) || []).filter((nb) => cDonorSet.has(nb)).length === 2
+        );
+      if (!isContinuousDonorRing) {
+        const paired = new Set<string>();
+        for (let i = 0; i < carbonDonorIds.length; i++) {
+          const c1Id = carbonDonorIds[i];
+          if (paired.has(c1Id)) continue;
+          for (let j = i + 1; j < carbonDonorIds.length; j++) {
+            const c2Id = carbonDonorIds[j];
+            if (paired.has(c2Id)) continue;
+            if ((adj.get(c1Id) || []).includes(c2Id)) {
+              paired.add(c1Id);
+              paired.add(c2Id);
+              eta2SecondaryIds.add(c2Id);
+              break;
+            }
+          }
+        }
+      }
+    }
 
     const globalVisited = new Set<string>([centerAtom.id]);
     const branches: LigandBranchInfo[] = [];
     let validStar = true;
+    const maxBranchSize = isMetalCenter ? 65 : 5;
 
     for (const dId of donorIds) {
+      if (eta2SecondaryIds.has(dId)) {
+        continue;
+      }
       if (globalVisited.has(dId)) {
         validStar = false;
         break;
@@ -367,6 +1090,7 @@ export function analyzeStarCoordinationTopology(
       }
 
       const branchAtoms: AtomNode[] = [];
+      const branchVisited = new Set<string>([dId]);
       const queue: AtomNode[] = [donor];
       globalVisited.add(dId);
 
@@ -375,14 +1099,16 @@ export function analyzeStarCoordinationTopology(
         branchAtoms.push(cur);
         for (const nbId of adj.get(cur.id) || []) {
           if (nbId === centerAtom.id) continue;
-          if (globalVisited.has(nbId)) {
-            // Cycle or cross-branch link detected (e.g. benzene ring or chelating macrocycle)
-            if (!branchAtoms.some((ba) => ba.id === nbId)) {
-              validStar = false;
-              break;
-            }
+          if (branchVisited.has(nbId)) {
+            // Intra-ligand ring closure (e.g. phenyl ring in -PPh3, pyridine ring, cyclohexene ring, or glucose ring in Auranofin)
             continue;
           }
+          if (globalVisited.has(nbId)) {
+            // Cross-branch link between two different donor sites of centerAtom (bidentate chelate or η²,η²-diene chelate)
+            validStar = false;
+            break;
+          }
+          branchVisited.add(nbId);
           globalVisited.add(nbId);
           const nbAtom = atoms.find((a) => a.id === nbId);
           if (nbAtom) queue.push(nbAtom);
@@ -390,7 +1116,7 @@ export function analyzeStarCoordinationTopology(
         if (!validStar) break;
       }
 
-      if (!validStar || branchAtoms.length > 5) {
+      if (!validStar || branchAtoms.length > maxBranchSize) {
         validStar = false;
         break;
       }
@@ -407,10 +1133,23 @@ export function analyzeStarCoordinationTopology(
       });
     }
 
+    const nLig = branches.length;
+    if (nLig < 2 || nLig > 6) continue;
+
     if (validStar && globalVisited.size === atoms.length) {
+      // If nLig === 2 and both branches are 5- or 6-membered rings (metallocene / bis-arene), defer to analyzeChelateOrSandwichTopology
+      if (
+        isMetalCenter &&
+        nLig === 2 &&
+        branches.every((b) => {
+          const cCount = b.distalAtoms.filter((x) => x.element === 'C').length;
+          return b.donor.element === 'C' && (cCount === 4 || cCount === 5);
+        })
+      ) {
+        continue;
+      }
+
       const isMonoatomicLigands = branches.every((b) => b.distalAtoms.length === 0);
-      const isMetalCenter =
-        isTransitionMetal(centerAtom.element) || isLanthanide(centerAtom.element);
 
       // Only transition-metal and lanthanide coordination complexes use polyatomic-branch star topology;
       // main-group centers use star VSEPR only for monoatomic ligands (AX_nE_m), while multi-center
@@ -772,6 +1511,7 @@ export function parseChemicalInputToGraph(
   };
 
   const ringClosures = new Map<string, { atomId: string; order: 1 | 2 | 3 }>();
+  const ringPlacedAtomIds = new Set<string>();
   const branchStack: string[] = [];
   let currentAtomId: string | null = null;
   let pendingOrder: 1 | 2 | 3 = 1;
@@ -781,6 +1521,7 @@ export function parseChemicalInputToGraph(
   let i = 0;
   while (i < text.length) {
     const ch = text[i];
+
     if (ch === '.') {
       currentAtomId = null;
       pendingOrder = 1;
@@ -828,22 +1569,50 @@ export function parseChemicalInputToGraph(
             target: currentAtomId,
             order: pendingOrder !== 1 ? pendingOrder : existing.order,
           });
-          // If this closes a simple ring of 3..8 atoms, arrange those ring vertices into a regular polygon
+          // If this closes a simple unplaced ring of 3..8 atoms, arrange those ring vertices into a regular polygon
+          // anchored at atoms[startIdx] so any exocyclic bond to atoms[startIdx] retains its 1.42 Å length.
           const startIdx = atoms.findIndex((a) => a.id === existing.atomId);
           const endIdx = atoms.findIndex((a) => a.id === currentAtomId);
           const ringLen = endIdx - startIdx + 1;
-          if (startIdx >= 0 && ringLen >= 3 && ringLen <= 8) {
+          const alreadyInRing =
+            startIdx >= 0 &&
+            atoms.slice(startIdx, endIdx + 1).some((a) => ringPlacedAtomIds.has(a.id));
+          if (startIdx >= 0 && ringLen >= 3 && ringLen <= 8 && !alreadyInRing) {
             const rPoly = 1.42 / (2 * Math.sin(Math.PI / ringLen));
             const anchorX = atoms[startIdx].x2d;
             const anchorY = atoms[startIdx].y2d;
+            let dirAngle = 0;
+            if (startIdx > 0) {
+              const exoBond = bonds.find(
+                (b) =>
+                  (b.source === atoms[startIdx].id &&
+                    atoms.findIndex((x) => x.id === b.target) < startIdx) ||
+                  (b.target === atoms[startIdx].id &&
+                    atoms.findIndex((x) => x.id === b.source) < startIdx)
+              );
+              if (exoBond) {
+                const prevNode = atoms.find(
+                  (x) =>
+                    x.id ===
+                    (exoBond.source === atoms[startIdx].id ? exoBond.target : exoBond.source)
+                );
+                if (prevNode) {
+                  dirAngle = Math.atan2(anchorY - prevNode.y2d, anchorX - prevNode.x2d);
+                }
+              }
+            }
+            const centerX = startIdx > 0 ? anchorX + rPoly * Math.cos(dirAngle) : anchorX;
+            const centerY = startIdx > 0 ? anchorY + rPoly * Math.sin(dirAngle) : anchorY;
+            const baseTheta = startIdx > 0 ? dirAngle + Math.PI : 0;
             for (let k = 0; k < ringLen; k++) {
-              const theta = (k * 2 * Math.PI) / ringLen;
-              const rx = Number((anchorX + rPoly * Math.cos(theta)).toFixed(2));
-              const ry = Number((anchorY + rPoly * Math.sin(theta)).toFixed(2));
+              const theta = baseTheta + (k * 2 * Math.PI) / ringLen;
+              const rx = Number((centerX + rPoly * Math.cos(theta)).toFixed(2));
+              const ry = Number((centerY + rPoly * Math.sin(theta)).toFixed(2));
               atoms[startIdx + k].x2d = rx;
               atoms[startIdx + k].y2d = ry;
               atoms[startIdx + k].x3d = rx;
               atoms[startIdx + k].y3d = -ry;
+              ringPlacedAtomIds.add(atoms[startIdx + k].id);
             }
           }
           ringClosures.delete(ch);
@@ -1002,7 +1771,17 @@ export function expandImplicitHydrogens(
     const missingH = getImplicitHydrogenCountForAtom(atom, atoms, bonds);
     if (missingH === 0) continue;
 
-    const connectedBonds = bonds.filter((b) => b.source === atom.id || b.target === atom.id);
+    const allConnectedBonds = bonds.filter((b) => b.source === atom.id || b.target === atom.id);
+    const nonMetalConnectedBonds =
+      !isTransitionMetal(atom.element) && !isLanthanide(atom.element)
+        ? allConnectedBonds.filter((b) => {
+            const otherId = b.source === atom.id ? b.target : b.source;
+            const other = atoms.find((a) => a.id === otherId);
+            return !other || (!isTransitionMetal(other.element) && !isLanthanide(other.element));
+          })
+        : allConnectedBonds;
+    const connectedBonds =
+      nonMetalConnectedBonds.length > 0 ? nonMetalConnectedBonds : allConnectedBonds;
 
     // 2D neighbor vectors for clean 2D sketcher layout
     const neighborVectors2D: [number, number][] = [];
@@ -1410,9 +2189,788 @@ export function reconstruct3DGeometryFromVSEPR(
     ];
   }
 
-  // 2. Check if molecule has a central coordination / VSEPR atom surrounded by nLig ∈ [2, 6] ligand branches
+  // 2. Check if molecule is a bidentate chelate or η5-metallocene sandwich complex
+  //    (e.g. Ferrocene Fe(C5H5)2, [Co(en)3]3+, [Ru(bpy)3]2+, Fe(acac)3, [Fe(C2O4)3]3-, Ni(dmgH)2, Oxaliplatin, Carboplatin)
+  const chelateTopo = analyzeChelateOrSandwichTopology(atoms, bonds);
+  if (chelateTopo) {
+    const { centerAtom, kind } = chelateTopo;
+    const coords3D = new Map<string, [number, number, number]>();
+    coords3D.set(centerAtom.id, [0, 0, 0]);
+
+    const adj = new Map<string, string[]>();
+    for (const a of atoms) adj.set(a.id, []);
+    for (const b of bonds) {
+      adj.get(b.source)?.push(b.target);
+      adj.get(b.target)?.push(b.source);
+    }
+
+    // Helper to place all hydrogens in a ligand component around their already-placed parent heavy atoms
+    const placeComponentHydrogens3D = (
+      comp: AtomNode[],
+      outwardDir: [number, number, number]
+    ) => {
+      const compHeavy = comp.filter((a) => a.element !== 'H');
+      for (const parent of compHeavy) {
+        const pPos = coords3D.get(parent.id);
+        if (!pPos) continue;
+        const conn = bonds.filter((b) => b.source === parent.id || b.target === parent.id);
+        const hNeighbors = conn
+          .map((b) => comp.find((x) => x.id === (b.source === parent.id ? b.target : b.source)))
+          .filter((x): x is AtomNode => Boolean(x && x.element === 'H'));
+        if (hNeighbors.length === 0) continue;
+
+        const heavyNbs = conn
+          .map((b) => comp.find((x) => x.id === (b.source === parent.id ? b.target : b.source)))
+          .filter((x): x is AtomNode => Boolean(x && x.element !== 'H'));
+
+        const uVecs: [number, number, number][] = heavyNbs
+          .map((nb) => {
+            const nbPos = coords3D.get(nb.id);
+            if (!nbPos) return null;
+            const dx = nbPos[0] - pPos[0];
+            const dy = nbPos[1] - pPos[1];
+            const dz = nbPos[2] - pPos[2];
+            const len = Math.hypot(dx, dy, dz) || 1;
+            return [dx / len, dy / len, dz / len] as [number, number, number];
+          })
+          .filter((v): v is [number, number, number] => Boolean(v));
+
+        const rXH = (ELEMENT_PROPERTIES[parent.element]?.covalentRadius ?? 0.77) + 0.32;
+        const organicBonds = conn.filter((b) => {
+          const otherId = b.source === parent.id ? b.target : b.source;
+          return otherId !== centerAtom.id;
+        });
+        const isParentSp3 = organicBonds.every((b) => b.order === 1) && organicBonds.length >= 3;
+
+        if (uVecs.length === 2 && hNeighbors.length === 2) {
+          const u1 = uVecs[0];
+          const u2 = uVecs[1];
+          let bx = -(u1[0] + u2[0]);
+          let by = -(u1[1] + u2[1]);
+          let bz = -(u1[2] + u2[2]);
+          let bLen = Math.hypot(bx, by, bz);
+          if (bLen < 0.08) {
+            bx = outwardDir[0];
+            by = outwardDir[1];
+            bz = outwardDir[2];
+            bLen = Math.hypot(bx, by, bz) || 1;
+          }
+          bx /= bLen;
+          by /= bLen;
+          bz /= bLen;
+
+          let nx = u1[1] * u2[2] - u1[2] * u2[1];
+          let ny = u1[2] * u2[0] - u1[0] * u2[2];
+          let nz = u1[0] * u2[1] - u1[1] * u2[0];
+          let nLen = Math.hypot(nx, ny, nz) || 1;
+          nx /= nLen;
+          ny /= nLen;
+          nz /= nLen;
+          const dotNB = nx * bx + ny * by + nz * bz;
+          nx -= dotNB * bx;
+          ny -= dotNB * by;
+          nz -= dotNB * bz;
+          nLen = Math.hypot(nx, ny, nz) || 1;
+          nx /= nLen;
+          ny /= nLen;
+          nz /= nLen;
+
+          const cTet = isParentSp3 ? 1 / Math.sqrt(3) : 0.5;
+          const sTet = isParentSp3 ? Math.sqrt(2 / 3) : 0.866;
+          coords3D.set(hNeighbors[0].id, [
+            Number((pPos[0] + rXH * (cTet * bx + sTet * nx)).toFixed(3)),
+            Number((pPos[1] + rXH * (cTet * by + sTet * ny)).toFixed(3)),
+            Number((pPos[2] + rXH * (cTet * bz + sTet * nz)).toFixed(3)),
+          ]);
+          coords3D.set(hNeighbors[1].id, [
+            Number((pPos[0] + rXH * (cTet * bx - sTet * nx)).toFixed(3)),
+            Number((pPos[1] + rXH * (cTet * by - sTet * ny)).toFixed(3)),
+            Number((pPos[2] + rXH * (cTet * bz - sTet * nz)).toFixed(3)),
+          ]);
+        } else if (uVecs.length >= 2 && hNeighbors.length === 1) {
+          let sx = uVecs.reduce((s, v) => s + v[0], 0);
+          let sy = uVecs.reduce((s, v) => s + v[1], 0);
+          let sz = uVecs.reduce((s, v) => s + v[2], 0);
+          // For coordinated alkene carbons, bias the vinylic C-H slightly outward away from the metal
+          if ((adj.get(parent.id) || []).includes(centerAtom.id)) {
+            sx -= 0.45 * outwardDir[0];
+            sy -= 0.45 * outwardDir[1];
+            sz -= 0.45 * outwardDir[2];
+          }
+          const sLen = Math.hypot(sx, sy, sz) || 1;
+          coords3D.set(hNeighbors[0].id, [
+            Number((pPos[0] - (rXH * sx) / sLen).toFixed(3)),
+            Number((pPos[1] - (rXH * sy) / sLen).toFixed(3)),
+            Number((pPos[2] - (rXH * sz) / sLen).toFixed(3)),
+          ]);
+        } else if (uVecs.length === 1 && hNeighbors.length >= 1) {
+          const u1 = uVecs[0];
+          const ax = -u1[0];
+          const ay = -u1[1];
+          const az = -u1[2];
+          let e1x = -ay;
+          let e1y = ax;
+          let e1z = 0;
+          let e1Len = Math.hypot(e1x, e1y, e1z);
+          if (e1Len < 0.1) {
+            e1x = 0;
+            e1y = -az;
+            e1z = ay;
+            e1Len = Math.hypot(e1x, e1y, e1z) || 1;
+          }
+          e1x /= e1Len;
+          e1y /= e1Len;
+          e1z /= e1Len;
+          const e2x = ay * e1z - az * e1y;
+          const e2y = az * e1x - ax * e1z;
+          const e2z = ax * e1y - ay * e1x;
+          const cosCone = hNeighbors.length === 2 ? 0.5 : 1 / 3;
+          const sinCone = hNeighbors.length === 2 ? 0.866 : (2 * Math.sqrt(2)) / 3;
+          hNeighbors.forEach((hAtom, idx) => {
+            const phi = (idx * 2 * Math.PI) / hNeighbors.length;
+            const cp = Math.cos(phi);
+            const sp = Math.sin(phi);
+            coords3D.set(hAtom.id, [
+              Number(
+                (pPos[0] + rXH * (cosCone * ax + sinCone * (cp * e1x + sp * e2x))).toFixed(3)
+              ),
+              Number(
+                (pPos[1] + rXH * (cosCone * ay + sinCone * (cp * e1y + sp * e2y))).toFixed(3)
+              ),
+              Number(
+                (pPos[2] + rXH * (cosCone * az + sinCone * (cp * e1z + sp * e2z))).toFixed(3)
+              ),
+            ]);
+          });
+        }
+      }
+    };
+
+    // Helper to reconstruct 3D tub/boat/cage geometry for a chelating η²,η²-diene ligand
+    // (e.g. 1,5-cyclooctadiene COD in Ni(COD)2 / Pt(COD)Cl2, norbornadiene NBD in Pt(nbd)Cl2, 1,3-butadiene)
+    const placeDieneChelateComponent = (
+      comp: AtomNode[],
+      bOut: [number, number, number],
+      eChord: [number, number, number],
+      eCC: [number, number, number]
+    ) => {
+      const compDonors = comp.filter((a) => (adj.get(a.id) || []).includes(centerAtom.id));
+      const donorSet = new Set(compDonors.map((d) => d.id));
+      const bridgeHeavy = comp.filter((a) => a.element !== 'H' && !donorSet.has(a.id));
+
+      // Partition the 4 donor carbons into two bonded C=C pairs: pairA = [cA1, cA2] and pairB = [cB1, cB2]
+      const pairedIds = new Set<string>();
+      const ccPairs: [AtomNode, AtomNode][] = [];
+      for (let i = 0; i < compDonors.length; i++) {
+        const d1 = compDonors[i];
+        if (pairedIds.has(d1.id)) continue;
+        const d2 =
+          compDonors.find(
+            (cand, j) =>
+              j > i &&
+              !pairedIds.has(cand.id) &&
+              bonds.some(
+                (b) =>
+                  b.order === 2 &&
+                  ((b.source === d1.id && b.target === cand.id) ||
+                    (b.source === cand.id && b.target === d1.id))
+              )
+          ) ||
+          compDonors.find(
+            (cand, j) =>
+              j > i &&
+              !pairedIds.has(cand.id) &&
+              bonds.some(
+                (b) =>
+                  (b.source === d1.id && b.target === cand.id) ||
+                  (b.source === cand.id && b.target === d1.id)
+              )
+          );
+        if (d2) {
+          pairedIds.add(d1.id);
+          pairedIds.add(d2.id);
+          ccPairs.push([d1, d2]);
+        }
+      }
+
+      if (ccPairs.length >= 2) {
+        const [cA1, cA2] = ccPairs[0];
+        let [cB1, cB2] = ccPairs[1];
+
+        // Graph distance inside `comp` excluding the two C=C bonds so cA1 and cB1 lie on the same -eCC side
+        const graphDistNoDouble = (startId: string, targetId: string): number => {
+          const q: { id: string; dist: number }[] = [{ id: startId, dist: 0 }];
+          const vis = new Set<string>([startId]);
+          while (q.length > 0) {
+            const { id, dist } = q.shift()!;
+            if (id === targetId) return dist;
+            for (const nbId of adj.get(id) || []) {
+              if (nbId === centerAtom.id || vis.has(nbId)) continue;
+              if (
+                (id === cA1.id && nbId === cA2.id) ||
+                (id === cA2.id && nbId === cA1.id) ||
+                (id === cB1.id && nbId === cB2.id) ||
+                (id === cB2.id && nbId === cB1.id)
+              ) {
+                continue;
+              }
+              if (comp.some((x) => x.id === nbId && x.element !== 'H')) {
+                vis.add(nbId);
+                q.push({ id: nbId, dist: dist + 1 });
+              }
+            }
+          }
+          return 99;
+        };
+
+        if (graphDistNoDouble(cA1.id, cB2.id) < graphDistNoDouble(cA1.id, cB1.id)) {
+          [cB1, cB2] = [cB2, cB1];
+        }
+
+        const setVec = (
+          atom: AtomNode,
+          sOut: number,
+          sChord: number,
+          sCC: number
+        ) => {
+          coords3D.set(atom.id, [
+            Number((sOut * bOut[0] + sChord * eChord[0] + sCC * eCC[0]).toFixed(3)),
+            Number((sOut * bOut[1] + sChord * eChord[1] + sCC * eCC[1]).toFixed(3)),
+            Number((sOut * bOut[2] + sChord * eChord[2] + sCC * eCC[2]).toFixed(3)),
+          ]);
+        };
+
+        if (bridgeHeavy.length === 0) {
+          // Conjugated cisoid η⁴-1,3-butadiene (C1=C2-C3=C4): ensure cIntA and cIntB are the two internal carbons (degree 2 within compDonors)
+          const donorNeighborsCount = (c: AtomNode) =>
+            (adj.get(c.id) || []).filter((nb) => donorSet.has(nb)).length;
+          const [cIntA, cTermA] =
+            donorNeighborsCount(cA1) >= donorNeighborsCount(cA2) ? [cA1, cA2] : [cA2, cA1];
+          const [cIntB, cTermB] =
+            donorNeighborsCount(cB1) >= donorNeighborsCount(cB2) ? [cB1, cB2] : [cB2, cB1];
+          setVec(cIntA, 1.48, 0.73, -0.52);
+          setVec(cIntB, 1.48, -0.73, -0.52);
+          setVec(cTermA, 1.32, 1.42, 0.68);
+          setVec(cTermB, 1.32, -1.42, 0.68);
+        } else {
+          const dChord = bridgeHeavy.length <= 3 ? 1.18 : 1.36;
+          const halfCC = 0.688;
+          setVec(cA1, 1.32, dChord, -halfCC);
+          setVec(cA2, 1.32, dChord, halfCC);
+          setVec(cB1, 1.32, -dChord, -halfCC);
+          setVec(cB2, 1.32, -dChord, halfCC);
+
+          if (bridgeHeavy.length === 4) {
+            // 1,5-Cyclooctadiene (COD) tub/boat conformation: two -CH2-CH2- bridges arching outward along +bOut
+            for (const m of bridgeHeavy) {
+              const mNbs = adj.get(m.id) || [];
+              if (mNbs.includes(cA1.id)) {
+                setVec(m, 2.48, 0.77, -1.28);
+              } else if (mNbs.includes(cB1.id)) {
+                setVec(m, 2.48, -0.77, -1.28);
+              } else if (mNbs.includes(cA2.id)) {
+                setVec(m, 2.48, 0.77, 1.28);
+              } else {
+                setVec(m, 2.48, -0.77, 1.28);
+              }
+            }
+          } else if (bridgeHeavy.length === 3) {
+            // Bicyclic Norbornadiene (NBD): 2 bridgehead -CH- carbons + 1 apical -CH2- bridge carbon
+            for (const m of bridgeHeavy) {
+              const mNbs = adj.get(m.id) || [];
+              if (mNbs.includes(cA1.id) || mNbs.includes(cB1.id)) {
+                setVec(m, 1.95, 0, -1.15);
+              } else if (mNbs.includes(cA2.id) || mNbs.includes(cB2.id)) {
+                setVec(m, 1.95, 0, 1.15);
+              } else {
+                setVec(m, 2.72, 0, 0);
+              }
+            }
+          } else {
+            // General bridged diene (e.g. 1,4-cyclohexadiene or substituted COD)
+            bridgeHeavy.forEach((m, idx) => {
+              const mNbs = adj.get(m.id) || [];
+              const sCC =
+                mNbs.includes(cA1.id) || mNbs.includes(cB1.id)
+                  ? -1.18
+                  : mNbs.includes(cA2.id) || mNbs.includes(cB2.id)
+                    ? 1.18
+                    : (idx % 2 === 0 ? -1 : 1) * 1.18;
+              const sChord = mNbs.includes(cA1.id) || mNbs.includes(cA2.id)
+                ? 0.55
+                : mNbs.includes(cB1.id) || mNbs.includes(cB2.id)
+                  ? -0.55
+                  : 0;
+              setVec(m, 2.15, sChord, sCC);
+            });
+          }
+        }
+      }
+
+      placeComponentHydrogens3D(comp, bOut);
+    };
+
+    if (kind === 'metallocene_sandwich') {
+      // Find the two C5 / C6 ring components when centerAtom is removed
+      const visited = new Set<string>([centerAtom.id]);
+      const ringComps: AtomNode[][] = [];
+      for (const a of atoms) {
+        if (visited.has(a.id)) continue;
+        const comp: AtomNode[] = [];
+        const q = [a.id];
+        visited.add(a.id);
+        while (q.length > 0) {
+          const curr = q.shift()!;
+          const node = atoms.find((x) => x.id === curr);
+          if (node) comp.push(node);
+          for (const nb of adj.get(curr) || []) {
+            if (!visited.has(nb)) {
+              visited.add(nb);
+              q.push(nb);
+            }
+          }
+        }
+        ringComps.push(comp);
+      }
+
+      ringComps.slice(0, 2).forEach((comp, ringIdx) => {
+        const ringCarbons = comp.filter(
+          (a) => a.element === 'C' && (adj.get(a.id) || []).includes(centerAtom.id)
+        );
+        const orderedRing: AtomNode[] = [];
+        if (ringCarbons.length > 0) {
+          const ringSet = new Set(ringCarbons.map((c) => c.id));
+          orderedRing.push(ringCarbons[0]);
+          const used = new Set<string>([ringCarbons[0].id]);
+          while (orderedRing.length < ringCarbons.length) {
+            const last = orderedRing[orderedRing.length - 1];
+            const nextId = (adj.get(last.id) || []).find(
+              (nb) => ringSet.has(nb) && !used.has(nb)
+            );
+            if (!nextId) {
+              const fallback = ringCarbons.find((c) => !used.has(c.id));
+              if (!fallback) break;
+              orderedRing.push(fallback);
+              used.add(fallback.id);
+            } else {
+              const nextNode = ringCarbons.find((c) => c.id === nextId)!;
+              orderedRing.push(nextNode);
+              used.add(nextNode.id);
+            }
+          }
+        }
+
+        const isSixRing = orderedRing.length === 6;
+        const zRing = ringIdx === 0 ? (isSixRing ? 1.61 : 1.66) : isSixRing ? -1.61 : -1.66;
+        const rCarbon = isSixRing ? 1.40 : 1.21;
+        // Eclipsed D6h for Bis(benzene)chromium Cr(C6H6)2; staggered D5d for Ferrocene Fe(C5H5)2
+        const phiOffset = ringIdx === 0 || isSixRing ? 0 : Math.PI / 5;
+
+        orderedRing.forEach((cAtom, k) => {
+          const phi = phiOffset + (k * 2 * Math.PI) / Math.max(1, orderedRing.length);
+          const cx = Number((rCarbon * Math.cos(phi)).toFixed(3));
+          const cy = Number((rCarbon * Math.sin(phi)).toFixed(3));
+          coords3D.set(cAtom.id, [cx, cy, zRing]);
+
+          // Place any attached H or substituent radially outward from the ring
+          const subs = (adj.get(cAtom.id) || [])
+            .filter((nb) => nb !== centerAtom.id && !orderedRing.some((rc) => rc.id === nb))
+            .map((nb) => atoms.find((x) => x.id === nb))
+            .filter((x): x is AtomNode => Boolean(x));
+          subs.forEach((sub, sIdx) => {
+            const rSub = rCarbon + (sub.element === 'H' ? 1.08 : 1.5);
+            const subPhi = phi + (sIdx - (subs.length - 1) / 2) * 0.15;
+            coords3D.set(sub.id, [
+              Number((rSub * Math.cos(subPhi)).toFixed(3)),
+              Number((rSub * Math.sin(subPhi)).toFixed(3)),
+              zRing,
+            ]);
+          });
+        });
+      });
+    } else if (kind === 'bis_diene_chelate') {
+      // Homoleptic Bis(diene) d10 tetrahedral chelate (e.g. Bis(1,5-cyclooctadiene)nickel Ni(COD)2 -> D2d):
+      // Ligand 0 on +x with C=C parallel to z; Ligand 1 on -x rotated 90° around x (C=C parallel to y) for exact S4 / D2d symmetry!
+      placeDieneChelateComponent(chelateTopo.ligands[0].allAtoms, [1, 0, 0], [0, 1, 0], [0, 0, 1]);
+      placeDieneChelateComponent(
+        chelateTopo.ligands[1].allAtoms,
+        [-1, 0, 0],
+        [0, 0, 1],
+        [0, 1, 0]
+      );
+    } else if (kind === 'mono_diene_chelate') {
+      // Square-planar d8 mono-diene chelate (e.g. Pt(COD)Cl2, Pd(COD)Cl2, [Rh(COD)Cl2]-, Pt(nbd)Cl2 -> C2v):
+      // Diene ligand on +x with C=C perpendicular to xy plane (along z); two cis monodentate ligands on -x at ±45° in xy plane.
+      placeDieneChelateComponent(chelateTopo.ligands[0].allAtoms, [1, 0, 0], [0, 1, 0], [0, 0, 1]);
+      const rCenter = ELEMENT_PROPERTIES[centerAtom.element]?.covalentRadius ?? 1.3;
+      const s2 = Math.SQRT1_2;
+      const monoDirs: [number, number, number][] = [
+        [-s2, s2, 0],
+        [-s2, -s2, 0],
+      ];
+      chelateTopo.ligands.slice(1, 3).forEach((lig, idx) => {
+        const d0 = lig.donors[0];
+        const rBond = Number(
+          ((rCenter + (ELEMENT_PROPERTIES[d0.element]?.covalentRadius ?? 0.99)) * 0.96).toFixed(3)
+        );
+        const uDir = monoDirs[idx];
+        const dPos: [number, number, number] = [
+          Number((rBond * uDir[0]).toFixed(3)),
+          Number((rBond * uDir[1]).toFixed(3)),
+          0,
+        ];
+        coords3D.set(d0.id, dPos);
+        const others = lig.allAtoms.filter((a) => a.id !== d0.id);
+        others.forEach((other, oIdx) => {
+          const rDist = other.element === 'H' ? 1.05 : 1.15;
+          const zOff = others.length > 1 ? (oIdx % 2 === 0 ? 0.5 : -0.5) : 0;
+          coords3D.set(other.id, [
+            Number((dPos[0] + rDist * uDir[0]).toFixed(3)),
+            Number((dPos[1] + rDist * uDir[1]).toFixed(3)),
+            Number(zOff.toFixed(3)),
+          ]);
+        });
+      });
+    } else if (kind === 'piano_stool_sandwich') {
+      // Half-sandwich / Piano-stool M(ηⁿ-ring/diene)L3 (e.g. (C6H6)Cr(CO)3, (C4H4)Fe(CO)3, (C4H6)Fe(CO)3)
+      const capLig = chelateTopo.ligands[0];
+      const capHeavy = capLig.allAtoms.filter((a) => a.element !== 'H');
+      const capDonors = capLig.donors;
+      const isCyclicCap = capHeavy.every(
+        (a) =>
+          (adj.get(a.id) || []).filter((nb) => capHeavy.some((h) => h.id === nb)).length === 2
+      );
+      if (isCyclicCap) {
+        const orderedRing: AtomNode[] = [capDonors[0]];
+        const used = new Set<string>([capDonors[0].id]);
+        const ringSet = new Set(capDonors.map((c) => c.id));
+        while (orderedRing.length < capDonors.length) {
+          const last = orderedRing[orderedRing.length - 1];
+          const nextId = (adj.get(last.id) || []).find(
+            (nb) => ringSet.has(nb) && !used.has(nb)
+          );
+          if (!nextId) break;
+          const nextNode = capDonors.find((c) => c.id === nextId)!;
+          orderedRing.push(nextNode);
+          used.add(nextNode.id);
+        }
+        const nRing = orderedRing.length;
+        const rCarbon = nRing === 6 ? 1.40 : nRing === 5 ? 1.21 : 1.02;
+        const zCap = 1.62;
+        orderedRing.forEach((cAtom, k) => {
+          const phi = Math.PI / 2 + (k * 2 * Math.PI) / Math.max(1, nRing);
+          const cx = Number((rCarbon * Math.cos(phi)).toFixed(3));
+          const cy = Number((rCarbon * Math.sin(phi)).toFixed(3));
+          coords3D.set(cAtom.id, [cx, cy, zCap]);
+          const subs = (adj.get(cAtom.id) || [])
+            .filter((nb) => nb !== centerAtom.id && !ringSet.has(nb))
+            .map((nb) => capLig.allAtoms.find((x) => x.id === nb))
+            .filter((x): x is AtomNode => Boolean(x));
+          subs.forEach((sub) => {
+            const rSub = rCarbon + (sub.element === 'H' ? 1.08 : 1.5);
+            coords3D.set(sub.id, [
+              Number((rSub * Math.cos(phi)).toFixed(3)),
+              Number((rSub * Math.sin(phi)).toFixed(3)),
+              Number((zCap + 0.12).toFixed(3)),
+            ]);
+          });
+        });
+      } else {
+        placeDieneChelateComponent(capLig.allAtoms, [0, 0, 1], [1, 0, 0], [0, 1, 0]);
+      }
+
+      // Place the 3 tripod legs at z < 0
+      const rCenter = ELEMENT_PROPERTIES[centerAtom.element]?.covalentRadius ?? 1.25;
+      chelateTopo.ligands.slice(1, 4).forEach((leg, idx) => {
+        const d0 = leg.donors[0];
+        const rBond = (rCenter + (ELEMENT_PROPERTIES[d0.element]?.covalentRadius ?? 0.75)) * 0.94;
+        const phi = Math.PI / 2 + (idx * 2 * Math.PI) / 3;
+        const sinT = 0.819; // sin(55°)
+        const cosT = -0.574; // -cos(55°)
+        const ux = sinT * Math.cos(phi);
+        const uy = sinT * Math.sin(phi);
+        const uz = cosT;
+        const dPos: [number, number, number] = [
+          Number((rBond * ux).toFixed(3)),
+          Number((rBond * uy).toFixed(3)),
+          Number((rBond * uz).toFixed(3)),
+        ];
+        coords3D.set(d0.id, dPos);
+        const others = leg.allAtoms.filter((a) => a.id !== d0.id);
+        others.forEach((other) => {
+          const distLen = other.element === 'H' ? 1.06 : 1.15;
+          coords3D.set(other.id, [
+            Number((dPos[0] + distLen * ux).toFixed(3)),
+            Number((dPos[1] + distLen * uy).toFixed(3)),
+            Number((dPos[2] + distLen * uz).toFixed(3)),
+          ]);
+        });
+      });
+    } else {
+      // Group ligand atoms into connected components when centerAtom is removed
+      const visited = new Set<string>([centerAtom.id]);
+      const ligComps: AtomNode[][] = [];
+      for (const a of atoms) {
+        if (visited.has(a.id)) continue;
+        const comp: AtomNode[] = [];
+        const q = [a.id];
+        visited.add(a.id);
+        while (q.length > 0) {
+          const curr = q.shift()!;
+          const node = atoms.find((x) => x.id === curr);
+          if (node) comp.push(node);
+          for (const nb of adj.get(curr) || []) {
+            if (!visited.has(nb)) {
+              visited.add(nb);
+              q.push(nb);
+            }
+          }
+        }
+        ligComps.push(comp);
+      }
+
+      const rCenter = ELEMENT_PROPERTIES[centerAtom.element]?.covalentRadius ?? 1.25;
+      const getMdLen = (donor: AtomNode) =>
+        Number(
+          ((rCenter + (ELEMENT_PROPERTIES[donor.element]?.covalentRadius ?? 0.73)) * 0.96).toFixed(
+            3
+          )
+        );
+
+      const placeChelateComponent = (
+        comp: AtomNode[],
+        d0Vec: [number, number, number],
+        d1Vec: [number, number, number],
+        bisector: [number, number, number],
+        chordDir: [number, number, number],
+        planeNorm: [number, number, number]
+      ) => {
+        const compDonors = comp.filter((a) => (adj.get(a.id) || []).includes(centerAtom.id));
+        if (compDonors.length === 1) {
+          const d0 = compDonors[0];
+          const r0 = getMdLen(d0);
+          const dPos: [number, number, number] = [
+            Number((r0 * d0Vec[0]).toFixed(3)),
+            Number((r0 * d0Vec[1]).toFixed(3)),
+            Number((r0 * d0Vec[2]).toFixed(3)),
+          ];
+          coords3D.set(d0.id, dPos);
+          const others = comp.filter((a) => a.id !== d0.id);
+          others.forEach((other, idx) => {
+            const phi = (idx * 2 * Math.PI) / Math.max(1, others.length);
+            const rDist = other.element === 'H' ? 1.02 : 1.42;
+            const cosT = 0.5;
+            const sinT = 0.866;
+            coords3D.set(other.id, [
+              Number(
+                (
+                  dPos[0] +
+                  rDist *
+                    (cosT * d0Vec[0] +
+                      sinT * (Math.cos(phi) * chordDir[0] + Math.sin(phi) * planeNorm[0]))
+                ).toFixed(3)
+              ),
+              Number(
+                (
+                  dPos[1] +
+                  rDist *
+                    (cosT * d0Vec[1] +
+                      sinT * (Math.cos(phi) * chordDir[1] + Math.sin(phi) * planeNorm[1]))
+                ).toFixed(3)
+              ),
+              Number(
+                (
+                  dPos[2] +
+                  rDist *
+                    (cosT * d0Vec[2] +
+                      sinT * (Math.cos(phi) * chordDir[2] + Math.sin(phi) * planeNorm[2]))
+                ).toFixed(3)
+              ),
+            ]);
+          });
+          return;
+        }
+        if (compDonors.length < 2) return;
+
+        const [d0, d1] = compDonors;
+        const r0 = getMdLen(d0);
+        const r1 = getMdLen(d1);
+        const p0: [number, number, number] = [
+          Number((r0 * d0Vec[0]).toFixed(3)),
+          Number((r0 * d0Vec[1]).toFixed(3)),
+          Number((r0 * d0Vec[2]).toFixed(3)),
+        ];
+        const p1: [number, number, number] = [
+          Number((r1 * d1Vec[0]).toFixed(3)),
+          Number((r1 * d1Vec[1]).toFixed(3)),
+          Number((r1 * d1Vec[2]).toFixed(3)),
+        ];
+        coords3D.set(d0.id, p0);
+        coords3D.set(d1.id, p1);
+
+        const mid3D: [number, number, number] = [
+          0.5 * (p0[0] + p1[0]),
+          0.5 * (p0[1] + p1[1]),
+          0.5 * (p0[2] + p1[2]),
+        ];
+        const targetChordLen = Math.hypot(p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]) || 2.6;
+
+        // Build local 2D/3D frame of the ligand component from d0 -> d1 and outward toward ligand centroid
+        const mid2x = 0.5 * (d0.x2d + d1.x2d);
+        const mid2y = 0.5 * (-d0.y2d + -d1.y2d);
+        let tx = d1.x2d - d0.x2d;
+        let ty = -d1.y2d - -d0.y2d;
+        const origChordLen = Math.hypot(tx, ty) || 1;
+        tx /= origChordLen;
+        ty /= origChordLen;
+
+        let bx = -ty;
+        let by = tx;
+        const nonDonors = comp.filter((a) => a.id !== d0.id && a.id !== d1.id && a.element !== 'H');
+        if (nonDonors.length > 0) {
+          const avgX = nonDonors.reduce((s, a) => s + a.x2d, 0) / nonDonors.length - mid2x;
+          const avgY = nonDonors.reduce((s, a) => s + -a.y2d, 0) / nonDonors.length - mid2y;
+          if (avgX * bx + avgY * by < 0) {
+            bx = -bx;
+            by = -by;
+          }
+        }
+
+        const scale2D = Math.min(1.35, Math.max(0.75, targetChordLen / origChordLen));
+        for (const a of comp) {
+          if (a.id === d0.id || a.id === d1.id) continue;
+          const dx = a.x2d - mid2x;
+          const dy = -a.y2d - mid2y;
+          const sOut = Math.max(0.25, (dx * bx + dy * by) * scale2D);
+          const sChord = (dx * tx + dy * ty) * scale2D;
+          const sNorm = a.element === 'H' ? ((a.id.charCodeAt(a.id.length - 1) % 2 === 0 ? 1 : -1) * 0.35) : 0;
+          coords3D.set(a.id, [
+            Number(
+              (mid3D[0] + sOut * bisector[0] + sChord * chordDir[0] + sNorm * planeNorm[0]).toFixed(
+                3
+              )
+            ),
+            Number(
+              (mid3D[1] + sOut * bisector[1] + sChord * chordDir[1] + sNorm * planeNorm[1]).toFixed(
+                3
+              )
+            ),
+            Number(
+              (mid3D[2] + sOut * bisector[2] + sChord * chordDir[2] + sNorm * planeNorm[2]).toFixed(
+                3
+              )
+            ),
+          ]);
+        }
+      };
+
+      if (kind === 'tris_bidentate_octahedral') {
+        const s2 = Math.SQRT1_2;
+        const octBites: {
+          d0: [number, number, number];
+          d1: [number, number, number];
+          bis: [number, number, number];
+          chord: [number, number, number];
+          norm: [number, number, number];
+        }[] = [
+          {
+            d0: [1, 0, 0],
+            d1: [0, 1, 0],
+            bis: [s2, s2, 0],
+            chord: [-s2, s2, 0],
+            norm: [0, 0, 1],
+          },
+          {
+            d0: [0, 0, 1],
+            d1: [-1, 0, 0],
+            bis: [-s2, 0, s2],
+            chord: [-s2, 0, -s2],
+            norm: [0, 1, 0],
+          },
+          {
+            d0: [0, -1, 0],
+            d1: [0, 0, -1],
+            bis: [0, -s2, -s2],
+            chord: [0, -s2, s2],
+            norm: [1, 0, 0],
+          },
+        ];
+        ligComps.slice(0, 3).forEach((comp, idx) => {
+          const cfg = octBites[idx];
+          placeChelateComponent(comp, cfg.d0, cfg.d1, cfg.bis, cfg.chord, cfg.norm);
+        });
+      } else {
+        // square_planar_chelate (e.g. Ni(dmgH)2, Oxaliplatin, Carboplatin)
+        const s2 = Math.SQRT1_2;
+        // Sort bidentate components first
+        const sortedComps = [...ligComps].sort((a, b) => {
+          const da = a.filter((x) => (adj.get(x.id) || []).includes(centerAtom.id)).length;
+          const db = b.filter((x) => (adj.get(x.id) || []).includes(centerAtom.id)).length;
+          return db - da;
+        });
+        if (sortedComps.length === 2) {
+          placeChelateComponent(
+            sortedComps[0],
+            [s2, -s2, 0],
+            [s2, s2, 0],
+            [1, 0, 0],
+            [0, 1, 0],
+            [0, 0, 1]
+          );
+          placeChelateComponent(
+            sortedComps[1],
+            [-s2, s2, 0],
+            [-s2, -s2, 0],
+            [-1, 0, 0],
+            [0, -1, 0],
+            [0, 0, 1]
+          );
+        } else if (sortedComps.length >= 3) {
+          // 1 bidentate + 2 monodentate (e.g. Carboplatin)
+          placeChelateComponent(
+            sortedComps[0],
+            [s2, -s2, 0],
+            [s2, s2, 0],
+            [1, 0, 0],
+            [0, 1, 0],
+            [0, 0, 1]
+          );
+          placeChelateComponent(
+            sortedComps[1],
+            [-s2, s2, 0],
+            [-s2, s2, 0],
+            [-s2, s2, 0],
+            [-s2, -s2, 0],
+            [0, 0, 1]
+          );
+          placeChelateComponent(
+            sortedComps[2],
+            [-s2, -s2, 0],
+            [-s2, -s2, 0],
+            [-s2, -s2, 0],
+            [s2, -s2, 0],
+            [0, 0, 1]
+          );
+        }
+      }
+    }
+
+    return atoms.map((a) => {
+      const c3 = coords3D.get(a.id) || [a.x2d - cx2d, -(a.y2d - cy2d), a.z3d || 0];
+      return {
+        ...a,
+        x2d: Number((a.x2d - cx2d).toFixed(2)),
+        y2d: Number((a.y2d - cy2d).toFixed(2)),
+        x3d: c3[0],
+        y3d: c3[1],
+        z3d: c3[2],
+      };
+    });
+  }
+
+  // 3. Check if molecule has a central coordination / VSEPR atom surrounded by nLig ∈ [2, 6] ligand branches
   // (Supports both monoatomic ligands like H2O, NH3, CH4, SF6, CrCl6, CeCl6 and polyatomic coordination complexes
-  // like Hexacyanoferrate [Fe(CN)6]4-, Ferricyanide [Fe(CN)6]3-, Cr(CO)6, Fe(CO)5, Ni(CO)4, [Ni(CN)4]2-, [Co(NH3)6]3+).
+  // like Wilkinson's catalyst [RhCl(PPh3)3], Vaska's complex [IrCl(CO)(PPh3)2], Pd(PPh3)4, Cisplatin, Hexacyanoferrate [Fe(CN)6]4-).
   const maxAbsZInit = atoms.reduce((m, a) => Math.max(m, Math.abs(a.z3d || 0)), 0);
   const starTopo = analyzeStarCoordinationTopology(atoms, bonds);
   const shouldApplyStarVsepr =
@@ -1531,14 +3089,10 @@ export function reconstruct3DGeometryFromVSEPR(
         coords3D.set(ligands[2].id, [Number(rAx2.toFixed(3)), 0.12, 0]);
       }
     } else if (nLig === 4) {
-      const isD10Carbonyl =
-        centerAtom.element === 'Ni' &&
-        charge === 0 &&
-        sortedBranches.every((b) => b.sig === 'C:O');
-      const isSqPlanarMetal = isSquarePlanarMetal(centerAtom.element) && !isD10Carbonyl;
+      const isSqPlanarMetal = isFourCoordSquarePlanar(centerAtom, sortedBranches, charge);
 
       if ((isMetalCenter && !isSqPlanarMetal) || (!isMetalCenter && lonePairs === 0)) {
-        // AX4E0 (CH4, SiH4, CCl4, TiCl4, Ni(CO)4) -> Tetrahedral (Td / C3v)
+        // AX4E0 (CH4, SiH4, CCl4, TiCl4, Ni(CO)4, Pd(PPh3)4, NiCl2(PPh3)2) -> Tetrahedral (Td / C3v / C2v)
         const tetDirs: [number, number, number][] = [
           [0.8165, 0.5774, 0],
           [-0.8165, 0.5774, 0],
@@ -1572,13 +3126,25 @@ export function reconstruct3DGeometryFromVSEPR(
         coords3D.set(ligands[2].id, [0, 0.14, Number(rAx.toFixed(3))]);
         coords3D.set(ligands[3].id, [0, 0.14, Number((-rAx).toFixed(3))]);
       } else {
-        // AX4E2 (XeF4) or d8 square-planar transition metal (PtCl4, [Ni(CN)4]2-, PdCl4, AuCl4) -> Square planar in xy plane (D4h, z = 0)
-        const sqDirs: [number, number, number][] = [
-          [1, 0, 0],
-          [-1, 0, 0],
-          [0, 1, 0],
-          [0, -1, 0],
-        ];
+        // AX4E2 (XeF4) or d8 square-planar transition metal ([RhCl(PPh3)3], [IrCl(CO)(PPh3)2], Cisplatin, PtCl4, [Ni(CN)4]2-)
+        // For ML2X2 (2 pairs of identical ligands, e.g. Cisplatin), place identical ligands cis (90°) for C2v symmetry;
+        // for ML2XY (Vaska's complex, 1+1+2), sortedBranches has the two unique ligands first -> place them trans ([1,0,0], [-1,0,0])
+        // and the two PPh3 ligands trans ([0,1,0], [0,-1,0]).
+        const sigCounts = Object.values(sigFreq);
+        const isCisPair = sigCounts.length === 2 && sigCounts.every((c) => c === 2);
+        const sqDirs: [number, number, number][] = isCisPair
+          ? [
+              [1, 0, 0],
+              [0, 1, 0],
+              [-1, 0, 0],
+              [0, -1, 0],
+            ]
+          : [
+              [1, 0, 0],
+              [-1, 0, 0],
+              [0, 1, 0],
+              [0, -1, 0],
+            ];
         ligands.forEach((lig, idx) => {
           const r = getBondLen(lig);
           const d = sqDirs[idx];
@@ -1672,7 +3238,16 @@ export function reconstruct3DGeometryFromVSEPR(
       }
     }
 
-    // Propagate 3D coordinates outward along each polyatomic ligand branch (e.g. N in Fe-C≡N, O in Cr-C≡O, H3 in Co-NH3)
+    // Build adjacency lookup for multi-shell ligand traversal
+    const branchAdj = new Map<string, string[]>();
+    for (const a of atoms) branchAdj.set(a.id, []);
+    for (const b of bonds) {
+      branchAdj.get(b.source)?.push(b.target);
+      branchAdj.get(b.target)?.push(b.source);
+    }
+
+    // Propagate 3D coordinates outward along each polyatomic ligand branch
+    // (Supports linear -CN/-CO/-NO, conical -NH3/-OH2, propeller -PPh3/-PEt3, η2-alkenes of any size, and general complex ligands)
     const centerPos = coords3D.get(centerAtom.id) || [0, 0, 0];
     for (const br of sortedBranches) {
       if (br.distalAtoms.length === 0) continue;
@@ -1685,6 +3260,43 @@ export function reconstruct3DGeometryFromVSEPR(
       const ux = vx / vLen;
       const uy = vy / vLen;
       const uz = vz / vLen;
+
+      const refX = Math.abs(uz) < 0.9 ? 0 : 1;
+      const refZ = Math.abs(uz) < 0.9 ? 1 : 0;
+      let e1x = uy * refZ;
+      let e1y = uz * refX - ux * refZ;
+      let e1z = -uy * refX;
+      const e1Len = Math.hypot(e1x, e1y, e1z) || 1;
+      e1x /= e1Len;
+      e1y /= e1Len;
+      e1z /= e1Len;
+      const e2x = uy * e1z - uz * e1y;
+      const e2y = uz * e1x - ux * e1z;
+      const e2z = ux * e1y - uy * e1x;
+
+      const distalSet = new Set(br.distalAtoms.map((a) => a.id));
+      const firstShell = br.distalAtoms.filter((a) =>
+        (branchAdj.get(br.donor.id) || []).includes(a.id)
+      );
+      const branchHeavy = [br.donor, ...br.distalAtoms].filter((a) => a.element !== 'H');
+      const eta2PartnerC =
+        br.donor.element === 'C'
+          ? br.distalAtoms.find(
+              (a) =>
+                a.element === 'C' &&
+                bonds.some(
+                  (b) =>
+                    (b.source === br.donor.id && b.target === a.id) ||
+                    (b.source === a.id && b.target === br.donor.id)
+                ) &&
+                (bonds.some(
+                  (b) =>
+                    (b.source === centerAtom.id && b.target === a.id) ||
+                    (b.source === a.id && b.target === centerAtom.id)
+                ) ||
+                  branchHeavy.length === 2)
+            )
+          : undefined;
 
       if (br.distalAtoms.length === 1) {
         const distal = br.distalAtoms[0];
@@ -1703,21 +3315,8 @@ export function reconstruct3DGeometryFromVSEPR(
           Number((dPos[1] + uy * distLen).toFixed(3)),
           Number((dPos[2] + uz * distLen).toFixed(3)),
         ]);
-      } else {
-        // Multi-atom conical substituent branch (e.g. -NH3, -OH2, -CH3, -NO2)
-        const refX = Math.abs(uz) < 0.9 ? 0 : 1;
-        const refZ = Math.abs(uz) < 0.9 ? 1 : 0;
-        let e1x = uy * refZ;
-        let e1y = uz * refX - ux * refZ;
-        let e1z = -uy * refX;
-        const e1Len = Math.hypot(e1x, e1y, e1z) || 1;
-        e1x /= e1Len;
-        e1y /= e1Len;
-        e1z /= e1Len;
-        const e2x = uy * e1z - uz * e1y;
-        const e2y = uz * e1x - ux * e1z;
-        const e2z = ux * e1y - uy * e1x;
-
+      } else if (firstShell.length === br.distalAtoms.length) {
+        // Single-shell conical substituent branch (e.g. -NH3, -OH2, -CH3, -NO2)
         const kCount = br.distalAtoms.length;
         const cosTheta = 0.52;
         const sinTheta = 0.854;
@@ -1737,6 +3336,554 @@ export function reconstruct3DGeometryFromVSEPR(
             Number((dPos[2] + dirZ * distLen).toFixed(3)),
           ]);
         });
+      } else if (br.donor.element === 'C' && eta2PartnerC) {
+        // Dewar-Chatt-Duncanson η²-Alkene ligand (checked BEFORE C3 phosphine branch so substituted/cyclic alkenes
+        // like propene, 1-hexene, styrene, cyclohexene, and norbornene are reconstructed as η²-alkenes):
+        // 1. Orient C=C along e2 (perpendicular to the square-planar xy coordination plane)
+        // 2. Elongate C=C bond length to 1.376 Å (halfCC = 0.688 Å) due to d_π -> π*(C=C) backbonding
+        // 3. Bend alkene substituents back away from the metal along +u (metallacyclopropane pyramidalization)
+        const otherC = eta2PartnerC;
+        const halfCC = 0.688;
+        const c0Pos: [number, number, number] = [
+          Number((dPos[0] - halfCC * e2x).toFixed(3)),
+          Number((dPos[1] - halfCC * e2y).toFixed(3)),
+          Number((dPos[2] - halfCC * e2z).toFixed(3)),
+        ];
+        const c1Pos: [number, number, number] = [
+          Number((dPos[0] + halfCC * e2x).toFixed(3)),
+          Number((dPos[1] + halfCC * e2y).toFixed(3)),
+          Number((dPos[2] + halfCC * e2z).toFixed(3)),
+        ];
+        coords3D.set(br.donor.id, c0Pos);
+        coords3D.set(otherC.id, c1Pos);
+
+        if (branchHeavy.length === 2) {
+          // Unsubstituted ethylene (η²-C2H4)
+          [
+            { cAtom: br.donor, cPos: c0Pos, sign2: -1 },
+            { cAtom: otherC, cPos: c1Pos, sign2: 1 },
+          ].forEach(({ cAtom, cPos, sign2 }) => {
+            const subAtoms = (branchAdj.get(cAtom.id) || [])
+              .filter((nb) => nb !== centerAtom.id && nb !== br.donor.id && nb !== otherC.id)
+              .map((nb) => atoms.find((x) => x.id === nb))
+              .filter((x): x is AtomNode => Boolean(x));
+            subAtoms.forEach((subAtom, sIdx) => {
+              const sign1 = sIdx === 0 ? -1 : 1;
+              const rBond = subAtom.element === 'H' ? 1.08 : 1.51;
+              coords3D.set(subAtom.id, [
+                Number(
+                  (cPos[0] + rBond * (0.32 * ux + 0.816 * sign1 * e1x + 0.48 * sign2 * e2x)).toFixed(
+                    3
+                  )
+                ),
+                Number(
+                  (cPos[1] + rBond * (0.32 * uy + 0.816 * sign1 * e1y + 0.48 * sign2 * e2y)).toFixed(
+                    3
+                  )
+                ),
+                Number(
+                  (cPos[2] + rBond * (0.32 * uz + 0.816 * sign1 * e1z + 0.48 * sign2 * e2z)).toFixed(
+                    3
+                  )
+                ),
+              ]);
+            });
+          });
+        } else {
+          // Substituted, cyclic, bicyclic, or aryl-conjugated η²-alkene (propene, 1-hexene, styrene, cyclohexene, norbornene):
+          // Map the ligand's 2D carbon skeleton relative to C0=C1 into the 3D DCD frame tilted away from the metal along +u
+          const mid2x = 0.5 * (br.donor.x2d + otherC.x2d);
+          const mid2y = 0.5 * (-br.donor.y2d + -otherC.y2d);
+          let tx = otherC.x2d - br.donor.x2d;
+          let ty = -otherC.y2d - -br.donor.y2d;
+          const origCCLen = Math.hypot(tx, ty) || 1.4;
+          tx /= origCCLen;
+          ty /= origCCLen;
+          let bx = -ty;
+          let by = tx;
+          const remHeavy = branchHeavy.filter(
+            (a) => a.id !== br.donor.id && a.id !== otherC.id
+          );
+          if (remHeavy.length > 0) {
+            const avgX = remHeavy.reduce((s, a) => s + a.x2d, 0) / remHeavy.length - mid2x;
+            const avgY = remHeavy.reduce((s, a) => s + -a.y2d, 0) / remHeavy.length - mid2y;
+            if (avgX * bx + avgY * by < 0) {
+              bx = -bx;
+              by = -by;
+            }
+          }
+
+          // Compute BFS depth from br.donor for sp3 ring/chain puckering
+          const alkDepth = new Map<string, number>([
+            [br.donor.id, 0],
+            [otherC.id, 0],
+          ]);
+          const qDepth = [br.donor.id, otherC.id];
+          while (qDepth.length > 0) {
+            const cur = qDepth.shift()!;
+            const d = alkDepth.get(cur) ?? 0;
+            for (const nb of branchAdj.get(cur) || []) {
+              if (nb !== centerAtom.id && !alkDepth.has(nb)) {
+                alkDepth.set(nb, d + 1);
+                qDepth.push(nb);
+              }
+            }
+          }
+
+          // Tilt angle away from metal (cosθ = 0.78 along e1, sinθ = 0.626 along +u)
+          const cosTilt = 0.78;
+          const sinTilt = 0.626;
+          const nRingX = cosTilt * ux - sinTilt * e1x;
+          const nRingY = cosTilt * uy - sinTilt * e1y;
+          const nRingZ = cosTilt * uz - sinTilt * e1z;
+
+          for (const a of remHeavy) {
+            const dx = a.x2d - mid2x;
+            const dy = -a.y2d - mid2y;
+            const sPar = dx * tx + dy * ty;
+            const sPerp = dx * bx + dy * by;
+            const connBonds = bonds.filter((b) => b.source === a.id || b.target === a.id);
+            const isSp3C = connBonds.every((b) => b.order === 1);
+            const depth = alkDepth.get(a.id) ?? 1;
+            const sPucker = isSp3C ? (depth % 2 === 0 ? 0.28 : -0.28) : 0;
+            const outU = Math.max(0.32, Math.abs(sPerp) * sinTilt);
+            const latE1 = sPerp * cosTilt;
+            coords3D.set(a.id, [
+              Number(
+                (dPos[0] + sPar * e2x + latE1 * e1x + outU * ux + sPucker * nRingX).toFixed(3)
+              ),
+              Number(
+                (dPos[1] + sPar * e2y + latE1 * e1y + outU * uy + sPucker * nRingY).toFixed(3)
+              ),
+              Number(
+                (dPos[2] + sPar * e2z + latE1 * e1z + outU * uz + sPucker * nRingZ).toFixed(3)
+              ),
+            ]);
+          }
+
+          // Perform 3D spring-bond & non-bonded steric relaxation on remHeavy (with br.donor and otherC anchored)
+          // so bicyclic/aryl/branched alkenes (e.g. norbornene, styrene) have physical ~1.40–1.54 Å C–C bonds.
+          const branchHeavySet = new Set(branchHeavy.map((x) => x.id));
+          const remHeavySet = new Set(remHeavy.map((x) => x.id));
+          const intraHeavyBonds = bonds.filter(
+            (b) => branchHeavySet.has(b.source) && branchHeavySet.has(b.target)
+          );
+          for (let iter = 0; iter < 35; iter++) {
+            for (const b of intraHeavyBonds) {
+              if (
+                (b.source === br.donor.id && b.target === otherC.id) ||
+                (b.source === otherC.id && b.target === br.donor.id)
+              ) {
+                continue;
+              }
+              const p1 = coords3D.get(b.source);
+              const p2 = coords3D.get(b.target);
+              if (!p1 || !p2) continue;
+              const dx = p2[0] - p1[0];
+              const dy = p2[1] - p1[1];
+              const dz = p2[2] - p1[2];
+              const d = Math.hypot(dx, dy, dz) || 0.01;
+              const targetLen = b.order >= 2 ? 1.40 : 1.50;
+              const diff = (d - targetLen) / d;
+              const m1 = remHeavySet.has(b.source);
+              const m2 = remHeavySet.has(b.target);
+              if (m1 && m2) {
+                const step = 0.35 * diff;
+                p1[0] += step * dx;
+                p1[1] += step * dy;
+                p1[2] += step * dz;
+                p2[0] -= step * dx;
+                p2[1] -= step * dy;
+                p2[2] -= step * dz;
+              } else if (m1) {
+                const step = 0.65 * diff;
+                p1[0] += step * dx;
+                p1[1] += step * dy;
+                p1[2] += step * dz;
+              } else if (m2) {
+                const step = 0.65 * diff;
+                p2[0] -= step * dx;
+                p2[1] -= step * dy;
+                p2[2] -= step * dz;
+              }
+            }
+            for (let i = 0; i < branchHeavy.length; i++) {
+              for (let j = i + 1; j < branchHeavy.length; j++) {
+                const id1 = branchHeavy[i].id;
+                const id2 = branchHeavy[j].id;
+                const isBonded = intraHeavyBonds.some(
+                  (b) =>
+                    (b.source === id1 && b.target === id2) ||
+                    (b.source === id2 && b.target === id1)
+                );
+                if (isBonded) continue;
+                const p1 = coords3D.get(id1);
+                const p2 = coords3D.get(id2);
+                if (!p1 || !p2) continue;
+                let dx = p2[0] - p1[0];
+                let dy = p2[1] - p1[1];
+                let dz = p2[2] - p1[2];
+                let d = Math.hypot(dx, dy, dz);
+                if (d < 2.15) {
+                  if (d < 0.05) {
+                    dx = nRingX;
+                    dy = nRingY;
+                    dz = nRingZ;
+                    d = 1;
+                  }
+                  const push = (2.15 - d) / d;
+                  const m1 = remHeavySet.has(id1);
+                  const m2 = remHeavySet.has(id2);
+                  if (m1 && m2) {
+                    p1[0] -= 0.3 * push * dx;
+                    p1[1] -= 0.3 * push * dy;
+                    p1[2] -= 0.3 * push * dz;
+                    p2[0] += 0.3 * push * dx;
+                    p2[1] += 0.3 * push * dy;
+                    p2[2] += 0.3 * push * dz;
+                  } else if (m1) {
+                    p1[0] -= 0.5 * push * dx;
+                    p1[1] -= 0.5 * push * dy;
+                    p1[2] -= 0.5 * push * dz;
+                  } else if (m2) {
+                    p2[0] += 0.5 * push * dx;
+                    p2[1] += 0.5 * push * dy;
+                    p2[2] += 0.5 * push * dz;
+                  }
+                }
+              }
+            }
+            for (const a of remHeavy) {
+              const p = coords3D.get(a.id);
+              if (!p) continue;
+              const projU = (p[0] - dPos[0]) * ux + (p[1] - dPos[1]) * uy + (p[2] - dPos[2]) * uz;
+              if (projU < 0.25) {
+                const boost = 0.25 - projU;
+                p[0] += boost * ux;
+                p[1] += boost * uy;
+                p[2] += boost * uz;
+              }
+              p[0] = Number(p[0].toFixed(3));
+              p[1] = Number(p[1].toFixed(3));
+              p[2] = Number(p[2].toFixed(3));
+            }
+          }
+
+          // Reconstruct all vinylic and aliphatic hydrogens on the alkene ligand
+          const allBranchAtoms = [br.donor, ...br.distalAtoms];
+          const hOnC0orC1 = new Set<string>();
+          [
+            { cAtom: br.donor, cPos: c0Pos, sign2: -1 },
+            { cAtom: otherC, cPos: c1Pos, sign2: 1 },
+          ].forEach(({ cAtom, cPos, sign2 }) => {
+            const vinylicHs = (branchAdj.get(cAtom.id) || [])
+              .map((nb) => allBranchAtoms.find((x) => x.id === nb && x.element === 'H'))
+              .filter((x): x is AtomNode => Boolean(x));
+            vinylicHs.forEach((hAtom, hIdx) => {
+              hOnC0orC1.add(hAtom.id);
+              // If C_i has 1 heavy substituent (on +e1 side) and 1 H, place the vinylic H on the opposite (-e1) side
+              const sign1 = vinylicHs.length === 1 ? -1 : hIdx === 0 ? -1 : 1;
+              const rBond = 1.08;
+              coords3D.set(hAtom.id, [
+                Number(
+                  (cPos[0] + rBond * (0.35 * ux + 0.80 * sign1 * e1x + 0.48 * sign2 * e2x)).toFixed(
+                    3
+                  )
+                ),
+                Number(
+                  (cPos[1] + rBond * (0.35 * uy + 0.80 * sign1 * e1y + 0.48 * sign2 * e2y)).toFixed(
+                    3
+                  )
+                ),
+                Number(
+                  (cPos[2] + rBond * (0.35 * uz + 0.80 * sign1 * e1z + 0.48 * sign2 * e2z)).toFixed(
+                    3
+                  )
+                ),
+              ]);
+            });
+          });
+
+          // Place remaining hydrogens attached to remHeavy
+          for (const parent of remHeavy) {
+            const pPos = coords3D.get(parent.id);
+            if (!pPos) continue;
+            const conn = bonds.filter((b) => b.source === parent.id || b.target === parent.id);
+            const hNeighbors = conn
+              .map((b) =>
+                allBranchAtoms.find(
+                  (x) =>
+                    x.id === (b.source === parent.id ? b.target : b.source) &&
+                    x.element === 'H' &&
+                    !hOnC0orC1.has(x.id)
+                )
+              )
+              .filter((x): x is AtomNode => Boolean(x));
+            if (hNeighbors.length === 0) continue;
+
+            const heavyNbs = conn
+              .map((b) =>
+                allBranchAtoms.find(
+                  (x) =>
+                    x.id === (b.source === parent.id ? b.target : b.source) && x.element !== 'H'
+                )
+              )
+              .filter((x): x is AtomNode => Boolean(x));
+
+            const uVecs: [number, number, number][] = heavyNbs
+              .map((nb) => {
+                const nbPos = coords3D.get(nb.id);
+                if (!nbPos) return null;
+                const dx = nbPos[0] - pPos[0];
+                const dy = nbPos[1] - pPos[1];
+                const dz = nbPos[2] - pPos[2];
+                const len = Math.hypot(dx, dy, dz) || 1;
+                return [dx / len, dy / len, dz / len] as [number, number, number];
+              })
+              .filter((v): v is [number, number, number] => Boolean(v));
+
+            const rXH = 1.09;
+            if (uVecs.length === 2 && hNeighbors.length === 2) {
+              const u1 = uVecs[0];
+              const u2 = uVecs[1];
+              let bxH = -(u1[0] + u2[0]);
+              let byH = -(u1[1] + u2[1]);
+              let bzH = -(u1[2] + u2[2]);
+              const bLen = Math.hypot(bxH, byH, bzH) || 1;
+              bxH /= bLen;
+              byH /= bLen;
+              bzH /= bLen;
+              let nx = u1[1] * u2[2] - u1[2] * u2[1];
+              let ny = u1[2] * u2[0] - u1[0] * u2[2];
+              let nz = u1[0] * u2[1] - u1[1] * u2[0];
+              let nLen = Math.hypot(nx, ny, nz) || 1;
+              nx /= nLen;
+              ny /= nLen;
+              nz /= nLen;
+              const cTet = 1 / Math.sqrt(3);
+              const sTet = Math.sqrt(2 / 3);
+              coords3D.set(hNeighbors[0].id, [
+                Number((pPos[0] + rXH * (cTet * bxH + sTet * nx)).toFixed(3)),
+                Number((pPos[1] + rXH * (cTet * byH + sTet * ny)).toFixed(3)),
+                Number((pPos[2] + rXH * (cTet * bzH + sTet * nz)).toFixed(3)),
+              ]);
+              coords3D.set(hNeighbors[1].id, [
+                Number((pPos[0] + rXH * (cTet * bxH - sTet * nx)).toFixed(3)),
+                Number((pPos[1] + rXH * (cTet * byH - sTet * ny)).toFixed(3)),
+                Number((pPos[2] + rXH * (cTet * bzH - sTet * nz)).toFixed(3)),
+              ]);
+            } else if (uVecs.length >= 2 && hNeighbors.length === 1) {
+              const sx = uVecs.reduce((s, v) => s + v[0], 0);
+              const sy = uVecs.reduce((s, v) => s + v[1], 0);
+              const sz = uVecs.reduce((s, v) => s + v[2], 0);
+              const sLen = Math.hypot(sx, sy, sz) || 1;
+              coords3D.set(hNeighbors[0].id, [
+                Number((pPos[0] - (rXH * sx) / sLen).toFixed(3)),
+                Number((pPos[1] - (rXH * sy) / sLen).toFixed(3)),
+                Number((pPos[2] - (rXH * sz) / sLen).toFixed(3)),
+              ]);
+            } else if (uVecs.length === 1 && hNeighbors.length >= 1) {
+              const u1 = uVecs[0];
+              const ax = -u1[0];
+              const ay = -u1[1];
+              const az = -u1[2];
+              let p1x = -ay;
+              let p1y = ax;
+              let p1z = 0;
+              let p1Len = Math.hypot(p1x, p1y, p1z) || 1;
+              p1x /= p1Len;
+              p1y /= p1Len;
+              const p2x = ay * p1z - az * p1y;
+              const p2y = az * p1x - ax * p1z;
+              const p2z = ax * p1y - ay * p1x;
+              const cosC = 1 / 3;
+              const sinC = (2 * Math.sqrt(2)) / 3;
+              hNeighbors.forEach((hAtom, idx) => {
+                const phi = (idx * 2 * Math.PI) / hNeighbors.length;
+                const cp = Math.cos(phi);
+                const sp = Math.sin(phi);
+                coords3D.set(hAtom.id, [
+                  Number((pPos[0] + rXH * (cosC * ax + sinC * (cp * p1x + sp * p2x))).toFixed(3)),
+                  Number((pPos[1] + rXH * (cosC * ay + sinC * (cp * p1y + sp * p2y))).toFixed(3)),
+                  Number((pPos[2] + rXH * (cosC * az + sinC * (cp * p1z + sp * p2z))).toFixed(3)),
+                ]);
+              });
+            }
+          }
+        }
+      } else if (firstShell.length === 3 && br.distalAtoms.length > 3) {
+        // Multi-shell C3 tetrahedral donor branch (e.g. -PPh3 in Wilkinson's catalyst / Vaska's complex / Pd(PPh3)4, or -PEt3 in Auranofin)
+        const cosCone = 0.485;
+        const sinCone = 0.8745;
+        const rDonor = ELEMENT_PROPERTIES[br.donor.element]?.covalentRadius ?? 1.07;
+
+        firstShell.forEach((ipso, mIdx) => {
+          // Collect sub-branch rooted at ipso
+          const subIds = new Set<string>([ipso.id]);
+          const q = [ipso.id];
+          while (q.length > 0) {
+            const curr = q.shift()!;
+            for (const nb of branchAdj.get(curr) || []) {
+              if (nb !== br.donor.id && distalSet.has(nb) && !subIds.has(nb)) {
+                subIds.add(nb);
+                q.push(nb);
+              }
+            }
+          }
+          const subAtoms = br.distalAtoms.filter((a) => subIds.has(a.id));
+          const subHeavy = subAtoms.filter((a) => a.element !== 'H');
+
+          const phi = (mIdx * 2 * Math.PI) / 3;
+          const cp = Math.cos(phi);
+          const sp = Math.sin(phi);
+          // Cone axis c_m for this substituent
+          const cxDir = cosCone * ux + sinCone * (cp * e1x + sp * e2x);
+          const cyDir = cosCone * uy + sinCone * (cp * e1y + sp * e2y);
+          const czDir = cosCone * uz + sinCone * (cp * e1z + sp * e2z);
+
+          // Tangential vector t_m and binormal w_m = c_m x t_m
+          const txDir = -sp * e1x + cp * e2x;
+          const tyDir = -sp * e1y + cp * e2y;
+          const tzDir = -sp * e1z + cp * e2z;
+          const wxDir = cyDir * tzDir - czDir * tyDir;
+          const wyDir = czDir * txDir - cxDir * tzDir;
+          const wzDir = cxDir * tyDir - cyDir * txDir;
+
+          // Propeller pitch angle 38° for phenyl rings
+          const cPitch = Math.cos((38 * Math.PI) / 180);
+          const sPitch = Math.sin((38 * Math.PI) / 180);
+          const pxDir = cPitch * txDir + sPitch * wxDir;
+          const pyDir = cPitch * tyDir + sPitch * wyDir;
+          const pzDir = cPitch * tzDir + sPitch * wzDir;
+
+          const rIpso =
+            (rDonor + (ELEMENT_PROPERTIES[ipso.element]?.covalentRadius ?? 0.76)) * 0.96;
+          const ipsoPos: [number, number, number] = [
+            Number((dPos[0] + rIpso * cxDir).toFixed(3)),
+            Number((dPos[1] + rIpso * cyDir).toFixed(3)),
+            Number((dPos[2] + rIpso * czDir).toFixed(3)),
+          ];
+          coords3D.set(ipso.id, ipsoPos);
+
+          if (subHeavy.length === 6) {
+            // Reconstruct 3D regular hexagon for the phenyl ring (C0 = ipso, C1..C5 around ring)
+            const orderedRing: AtomNode[] = [ipso];
+            const usedRing = new Set<string>([ipso.id]);
+            const heavySet = new Set(subHeavy.map((a) => a.id));
+            while (orderedRing.length < 6) {
+              const last = orderedRing[orderedRing.length - 1];
+              const nextId = (branchAdj.get(last.id) || []).find(
+                (nb) => heavySet.has(nb) && !usedRing.has(nb)
+              );
+              if (!nextId) {
+                const rem = subHeavy.find((a) => !usedRing.has(a.id));
+                if (!rem) break;
+                orderedRing.push(rem);
+                usedRing.add(rem.id);
+              } else {
+                const nextNode = subHeavy.find((a) => a.id === nextId)!;
+                orderedRing.push(nextNode);
+                usedRing.add(nextNode.id);
+              }
+            }
+
+            const rCC = 1.39;
+            const s32 = Math.sqrt(3) / 2;
+            const ringOffsets: [number, number][] = [
+              [0, 0],
+              [0.5, s32],
+              [1.5, s32],
+              [2.0, 0],
+              [1.5, -s32],
+              [0.5, -s32],
+            ];
+            const ringCenter: [number, number, number] = [
+              ipsoPos[0] + rCC * cxDir,
+              ipsoPos[1] + rCC * cyDir,
+              ipsoPos[2] + rCC * czDir,
+            ];
+
+            orderedRing.forEach((rAtom, rIdx) => {
+              const [alongC, alongP] = ringOffsets[rIdx];
+              const rx = Number(
+                (ipsoPos[0] + rCC * (alongC * cxDir + alongP * pxDir)).toFixed(3)
+              );
+              const ry = Number(
+                (ipsoPos[1] + rCC * (alongC * cyDir + alongP * pyDir)).toFixed(3)
+              );
+              const rz = Number(
+                (ipsoPos[2] + rCC * (alongC * czDir + alongP * pzDir)).toFixed(3)
+              );
+              coords3D.set(rAtom.id, [rx, ry, rz]);
+
+              // Place any attached H radially outward from the phenyl ring center
+              const hNbs = (branchAdj.get(rAtom.id) || [])
+                .map((nb) => subAtoms.find((x) => x.id === nb && x.element === 'H'))
+                .filter((x): x is AtomNode => Boolean(x));
+              hNbs.forEach((hAtom) => {
+                const hdx = rx - ringCenter[0];
+                const hdy = ry - ringCenter[1];
+                const hdz = rz - ringCenter[2];
+                const hLen = Math.hypot(hdx, hdy, hdz) || 1;
+                coords3D.set(hAtom.id, [
+                  Number((rx + (hdx / hLen) * 1.08).toFixed(3)),
+                  Number((ry + (hdy / hLen) * 1.08).toFixed(3)),
+                  Number((rz + (hdz / hLen) * 1.08).toFixed(3)),
+                ]);
+              });
+            });
+          } else {
+            // Non-phenyl alkyl sub-branch (e.g. ethyl in -PEt3): extend along cone direction
+            const otherSub = subAtoms.filter((a) => a.id !== ipso.id);
+            otherSub.forEach((sAtom, sIdx) => {
+              const step = sAtom.element === 'H' ? 1.09 : 1.52;
+              const angle = ((sIdx + 1) * 2 * Math.PI) / Math.max(1, otherSub.length);
+              coords3D.set(sAtom.id, [
+                Number(
+                  (
+                    ipsoPos[0] +
+                    step * (0.75 * cxDir + 0.66 * (Math.cos(angle) * pxDir + Math.sin(angle) * wxDir))
+                  ).toFixed(3)
+                ),
+                Number(
+                  (
+                    ipsoPos[1] +
+                    step * (0.75 * cyDir + 0.66 * (Math.cos(angle) * pyDir + Math.sin(angle) * wyDir))
+                  ).toFixed(3)
+                ),
+                Number(
+                  (
+                    ipsoPos[2] +
+                    step * (0.75 * czDir + 0.66 * (Math.cos(angle) * pzDir + Math.sin(angle) * wzDir))
+                  ).toFixed(3)
+                ),
+              ]);
+            });
+          }
+        });
+      } else {
+        // Rigidly orient the ligand's 2D coordinates outward along u from dPos
+        const avg2x =
+          br.distalAtoms.reduce((s, a) => s + a.x2d, 0) / br.distalAtoms.length - br.donor.x2d;
+        const avg2y =
+          br.distalAtoms.reduce((s, a) => s + -a.y2d, 0) / br.distalAtoms.length - -br.donor.y2d;
+        const avgLen = Math.hypot(avg2x, avg2y) || 1;
+        const lbx = avg2x / avgLen;
+        const lby = avg2y / avgLen;
+        const ltx = -lby;
+        const lty = lbx;
+        for (const a of br.distalAtoms) {
+          const dx = a.x2d - br.donor.x2d;
+          const dy = -a.y2d - -br.donor.y2d;
+          const sOut = Math.max(0.4, dx * lbx + dy * lby);
+          const sTrans = dx * ltx + dy * lty;
+          const sNorm = a.z3d || 0;
+          coords3D.set(a.id, [
+            Number((dPos[0] + sOut * ux + sTrans * e1x + sNorm * e2x).toFixed(3)),
+            Number((dPos[1] + sOut * uy + sTrans * e1y + sNorm * e2y).toFixed(3)),
+            Number((dPos[2] + sOut * uz + sTrans * e1z + sNorm * e2z).toFixed(3)),
+          ]);
+        }
       }
     }
 
@@ -2215,8 +4362,15 @@ export function detectPointGroup(atoms: AtomNode[], bonds: BondEdge[], charge = 
     if (degs.every((d) => d === 2)) return 'D4h';
   }
 
+  // Bidentate chelate and η5-metallocene sandwich point-group classification
+  // (e.g. Ferrocene -> D5d, [Co(en)3]3+ / [Ru(bpy)3]2+ / Fe(acac)3 / [Fe(C2O4)3]3- -> D3, Ni(dmgH)2 -> D2h, Oxaliplatin / Carboplatin -> C2v)
+  const chelateTopo = analyzeChelateOrSandwichTopology(atoms, bonds);
+  if (chelateTopo) {
+    return chelateTopo.pointGroupId;
+  }
+
   // Central atom surrounded by nLig ligands (AX_nE_m VSEPR & d/f coordination point-group classification,
-  // supporting both monoatomic ligands and polyatomic ligands like -CN, -CO, -NO, -NH3)
+  // supporting both monoatomic ligands and polyatomic ligands like -PPh3, -CN, -CO, -NO, -NH3, -C2H4)
   const starTopo = analyzeStarCoordinationTopology(atoms, bonds);
 
   if (starTopo) {
@@ -2226,6 +4380,7 @@ export function detectPointGroup(atoms: AtomNode[], bonds: BondEdge[], charge = 
     const isMetalCenter =
       isTransitionMetal(centerAtom.element) || isLanthanide(centerAtom.element);
     const lonePairs = getCentralAtomLonePairs(centerAtom, atoms, bonds, charge);
+    const isSqPlanar = nLig === 4 && isFourCoordSquarePlanar(centerAtom, branches, charge);
 
     if (ligandSigs.size === 1) {
       if (nLig === 2) {
@@ -2239,11 +4394,7 @@ export function detectPointGroup(atoms: AtomNode[], bonds: BondEdge[], charge = 
       }
       if (nLig === 4) {
         if (isMetalCenter) {
-          const isD10Carbonyl =
-            centerAtom.element === 'Ni' &&
-            charge === 0 &&
-            branches.every((b) => b.sig === 'C:O');
-          return isSquarePlanarMetal(centerAtom.element) && !isD10Carbonyl ? 'D4h' : 'Td';
+          return isSqPlanar ? 'D4h' : 'Td';
         }
         // AX4E0 (CH4, CCl4) -> Td; AX4E1 (SF4) -> C2v; AX4E2 (XeF4) -> D4h
         if (lonePairs === 0) return 'Td';
@@ -2272,7 +4423,9 @@ export function detectPointGroup(atoms: AtomNode[], bonds: BondEdge[], charge = 
         return isMetalCenter || lonePairs === 0 ? 'C2v' : 'Cs';
       }
       if (nLig === 4 && sigCounts.includes(3)) {
-        // AX3Y tetrahedral (CHCl3, POCl3 -> C3v)
+        // ML3X square planar (Wilkinson's catalyst [RhCl(PPh3)3], Zeise's salt [PtCl3(C2H4)]- -> C2v)
+        // vs AX3Y tetrahedral (CHCl3, POCl3 -> C3v)
+        if (isMetalCenter && isSqPlanar) return 'C2v';
         return isMetalCenter || lonePairs === 0 ? 'C3v' : 'Cs';
       }
       if (nLig === 4 && sigCounts.includes(2)) {
@@ -2288,6 +4441,19 @@ export function detectPointGroup(atoms: AtomNode[], bonds: BondEdge[], charge = 
       }
       if (nLig === 6 && sigCounts.includes(4)) {
         return 'D4h';
+      }
+    }
+
+    if (ligandSigs.size === 3) {
+      const sigCounts = Array.from(ligandSigs).map(
+        (sig) => branches.filter((b) => b.sig === sig).length
+      );
+      if (nLig === 4 && sigCounts.includes(2)) {
+        // trans-ML2XY square planar (e.g. Vaska's complex trans-[IrCl(CO)(PPh3)2] -> C2v) vs tetrahedral -> Cs
+        return isMetalCenter && isSqPlanar ? 'C2v' : 'Cs';
+      }
+      if (nLig === 6) {
+        return isMetalCenter || lonePairs === 0 ? 'C2v' : 'Cs';
       }
     }
   }
@@ -2673,20 +4839,47 @@ export function runExtendedHuckelSolver(
   }
 
   // For large systems (> 28 atoms), prune explicit C-H hydrogens from the active matrix
-  // so the solver focuses on the heavy-atom framework + heteroatom H and runs in < 20 ms
+  // and prioritize the central metal + inner coordination shells by BFS graph distance
+  // so that metal centers at the end of a PubChem SDF atom table (e.g. Rh59 in Wilkinson's catalyst)
+  // are never truncated out of the LCAO-MO basis.
   const isLargeSystem = atoms.length > 28;
-  const activeAtoms = isLargeSystem
-    ? atoms
-        .filter((a) => {
-          if (a.element !== 'H') return true;
-          const attached = bonds.find((b) => b.source === a.id || b.target === a.id);
-          if (!attached) return false;
-          const partnerId = attached.source === a.id ? attached.target : attached.source;
-          const partner = atoms.find((p) => p.id === partnerId);
-          return partner && partner.element !== 'C';
-        })
-        .slice(0, 48)
-    : atoms;
+  let activeAtoms = atoms;
+  if (isLargeSystem) {
+    const filtered = atoms.filter((a) => {
+      if (a.element !== 'H') return true;
+      const attached = bonds.find((b) => b.source === a.id || b.target === a.id);
+      if (!attached) return false;
+      const partnerId = attached.source === a.id ? attached.target : attached.source;
+      const partner = atoms.find((p) => p.id === partnerId);
+      return partner && partner.element !== 'C';
+    });
+    if (filtered.length > 48) {
+      const metalRoots = filtered.filter(
+        (a) => isTransitionMetal(a.element) || isLanthanide(a.element)
+      );
+      if (metalRoots.length > 0) {
+        const bfsDist = new Map<string, number>();
+        const q: string[] = [];
+        for (const m of metalRoots) {
+          bfsDist.set(m.id, 0);
+          q.push(m.id);
+        }
+        while (q.length > 0) {
+          const curr = q.shift()!;
+          const d = bfsDist.get(curr) ?? 0;
+          for (const b of bonds) {
+            const nb = b.source === curr ? b.target : b.target === curr ? b.source : null;
+            if (nb && !bfsDist.has(nb)) {
+              bfsDist.set(nb, d + 1);
+              q.push(nb);
+            }
+          }
+        }
+        filtered.sort((a, b) => (bfsDist.get(a.id) ?? 99) - (bfsDist.get(b.id) ?? 99));
+      }
+    }
+    activeAtoms = filtered.slice(0, 48);
+  }
 
   const D_ORBITALS: { orb: OrbitalBasisType; suffix: string }[] = [
     { orb: 'dz2', suffix: 'dz2' },
@@ -2898,18 +5091,21 @@ export function analyzeMolecularGraph(
     );
   }
 
-  // 2. Otherwise, resolve any unlinked dative metal-ligand coordination bonds,
-  //    expand implicit hydrogens (for small/medium graphs <= 24 atoms),
+  // 2. Otherwise, resolve any unlinked dative metal-ligand coordination bonds
+  //    (including partially bonded complexes like Cisplatin Cl-Pt-Cl + 2 NH3 or Nitroprusside [Fe(CN)5] + NO),
+  //    expand implicit hydrogens (for small/medium graphs <= 28 heavy atoms),
   //    reconstruct 3D VSEPR / coordination coordinates,
   //    and run the full s-p-d-f Extended Hückel LCAO-MO + Symmetry solver
-  const hasDisconnectedMetalCenter = rawAtoms.some(
-    (a) =>
-      (isTransitionMetal(a.element) || isLanthanide(a.element)) &&
-      rawBonds.filter((b) => b.source === a.id || b.target === a.id).length === 0 &&
-      rawAtoms.length >= 3
-  );
-  const coordResolved = hasDisconnectedMetalCenter
-    ? resolveCoordinationBonds(rawAtoms, rawBonds, false)
+  const hasCoordinationCenter =
+    rawAtoms.length >= 3 &&
+    rawAtoms.some(
+      (a) =>
+        isTransitionMetal(a.element) ||
+        isLanthanide(a.element) ||
+        MAIN_GROUP_COORD_CENTERS.has(a.element)
+    );
+  const coordResolved = hasCoordinationCenter
+    ? resolveCoordinationBonds(rawAtoms, rawBonds, true)
     : { atoms: rawAtoms, bonds: rawBonds };
 
   const rawHeavyCount = coordResolved.atoms.filter((a) => a.element !== 'H').length;
@@ -2954,8 +5150,10 @@ export function analyzeMolecularGraph(
 
   // Identify central / primary skeleton atom and peripheral ligand atom for dynamic fragment orbitals
   const starTopo = analyzeStarCoordinationTopology(centeredAtoms, bonds);
+  const chelateTopo = analyzeChelateOrSandwichTopology(centeredAtoms, bonds);
   const primaryAtom =
     starTopo?.centerAtom ||
+    chelateTopo?.centerAtom ||
     centeredAtoms.find((a) => isTransitionMetal(a.element) || isLanthanide(a.element)) ||
     centeredAtoms.find((a) => {
       const deg = bonds.filter((b) => b.source === a.id || b.target === a.id).length;
@@ -2965,6 +5163,7 @@ export function analyzeMolecularGraph(
     centeredAtoms[0];
   const peripheralAtom =
     starTopo?.branches[0]?.donor ||
+    chelateTopo?.ligands[0]?.donors[0] ||
     centeredAtoms.find((a) => a.id !== primaryAtom?.id) ||
     primaryAtom;
 
@@ -2975,7 +5174,49 @@ export function analyzeMolecularGraph(
   const primIsTm = primaryAtom ? isTransitionMetal(primaryAtom.element) : false;
   const primIsLn = primaryAtom ? isLanthanide(primaryAtom.element) : false;
 
-  // Build dynamic fragment orbitals from actual element VSIEs
+  // Detect Dewar-Chatt-Duncanson η²-alkene coordination (a transition metal bonded to both C1 and C2 of an η² C=C alkene or chelating diene)
+  const dcdAlkenePair = (() => {
+    if (!primaryAtom || (!primIsTm && !primIsLn)) return null;
+    const mNbIds = bonds
+      .filter((b) => b.source === primaryAtom.id || b.target === primaryAtom.id)
+      .map((b) => (b.source === primaryAtom.id ? b.target : b.source));
+    const cNbs = mNbIds
+      .map((id) => centeredAtoms.find((a) => a.id === id))
+      .filter((a): a is AtomNode => Boolean(a && a.element === 'C'));
+    if (cNbs.length < 2) return null;
+    const cNbSet = new Set(cNbs.map((a) => a.id));
+    for (let i = 0; i < cNbs.length; i++) {
+      for (let j = i + 1; j < cNbs.length; j++) {
+        const ccBond = bonds.find(
+          (b) =>
+            (b.source === cNbs[i].id && b.target === cNbs[j].id) ||
+            (b.source === cNbs[j].id && b.target === cNbs[i].id)
+        );
+        if (!ccBond) continue;
+        // Verify this C-C pair is a discrete η²-alkene unit (not part of a continuous η⁴/η⁵/η⁶ sandwich ring)
+        const otherCNbsI = bonds.filter(
+          (b) =>
+            (b.source === cNbs[i].id && cNbSet.has(b.target) && b.target !== cNbs[j].id) ||
+            (b.target === cNbs[i].id && cNbSet.has(b.source) && b.source !== cNbs[j].id)
+        ).length;
+        const otherCNbsJ = bonds.filter(
+          (b) =>
+            (b.source === cNbs[j].id && cNbSet.has(b.target) && b.target !== cNbs[i].id) ||
+            (b.target === cNbs[j].id && cNbSet.has(b.source) && b.source !== cNbs[i].id)
+        ).length;
+        if (otherCNbsI === 0 && otherCNbsJ === 0) {
+          const coDonor =
+            centeredAtoms.find(
+              (a) => mNbIds.includes(a.id) && a.id !== cNbs[i].id && a.id !== cNbs[j].id
+            ) || peripheralAtom;
+          return { metalAtom: primaryAtom, c1: cNbs[i], c2: cNbs[j], coDonor };
+        }
+      }
+    }
+    return null;
+  })();
+
+  // Build dynamic fragment orbitals from actual element VSIEs (or Dewar-Chatt-Duncanson fragments for η²-alkene complexes)
   const firstIrrepLower = (pg.irreps[0]?.symbol || 'a').toLowerCase().replace(/ς/g, 'σ');
   const secondIrrepLower = (pg.irreps[Math.min(1, pg.irreps.length - 1)]?.symbol || 'b')
     .toLowerCase()
@@ -2983,78 +5224,143 @@ export function analyzeMolecularGraph(
   const lastIrrepLower = (pg.irreps[pg.irreps.length - 1]?.symbol || 'b')
     .toLowerCase()
     .replace(/ς/g, 'σ');
-  const fragmentOrbitals: FragmentOrbital[] = [
-    {
-      id: 'frag_left_s',
-      side: 'left',
-      label: `${primaryAtom?.element || 'C'} ${primShell}s`,
-      fragmentName: `${primaryAtom?.element || 'Core'} Valence`,
-      energy: primProps.vsieS,
-      irrep: firstIrrepLower,
-      degeneracy: 1,
-      electrons: 2,
-    },
-    {
-      id: 'frag_left_p',
-      side: 'left',
-      label: `${primaryAtom?.element || 'C'} ${primShell}p (σ / π)`,
-      fragmentName: `${primaryAtom?.element || 'Core'} Valence`,
-      energy: primProps.vsieP,
-      irrep: secondIrrepLower,
-      degeneracy: 3,
-      electrons: Math.max(0, Math.min(6, primProps.valenceElectrons - 2)),
-    },
-    ...(primIsLn
-      ? [
-          {
-            id: 'frag_left_f',
-            side: 'left' as const,
-            label: `${primaryAtom?.element} 4f`,
-            fragmentName: `${primaryAtom?.element} 4f/5d Shell`,
-            energy: primProps.vsieF ?? -12.5,
-            irrep: secondIrrepLower,
-            degeneracy: 7,
-            electrons: Math.max(0, primProps.valenceElectrons - 2),
-          },
-          {
-            id: 'frag_left_d',
-            side: 'left' as const,
-            label: `${primaryAtom?.element} 5d`,
-            fragmentName: `${primaryAtom?.element} 4f/5d Shell`,
-            energy: primProps.vsieD ?? -8.0,
-            irrep: firstIrrepLower,
-            degeneracy: 5,
-            electrons: 1,
-          },
-        ]
-      : primIsTm
-        ? [
-            {
-              id: 'frag_left_d',
-              side: 'left' as const,
-              label: `${primaryAtom?.element} ${Math.max(3, Number(primShell) - 1)}d`,
-              fragmentName: `${primaryAtom?.element} d-Manifold`,
-              energy: primProps.vsieD ?? -10.5,
-              irrep: `${firstIrrepLower} + ${secondIrrepLower}`,
-              degeneracy: 5,
-              electrons: Math.max(1, primProps.valenceElectrons - 2),
-            },
-          ]
-        : []),
-    {
-      id: 'frag_right_salc',
-      side: 'right',
-      label:
-        peripheralAtom?.element === 'H'
-          ? 'Ligand H 1s SALCs'
-          : `Ligand ${peripheralAtom?.element || 'L'} ${periphShell}p SALCs`,
-      fragmentName: 'Substituent SALCs',
-      energy: peripheralAtom?.element === 'H' ? periphProps.vsieS : periphProps.vsieP,
-      irrep: `${firstIrrepLower} + ${lastIrrepLower}`,
-      degeneracy: 2,
-      electrons: 2,
-    },
-  ];
+  const dShellNum = Math.max(3, Number(primShell) - 1);
+  const fragmentOrbitals: FragmentOrbital[] = dcdAlkenePair
+    ? [
+        {
+          id: 'frag_dcd_m_dpi',
+          side: 'left',
+          label: `${dcdAlkenePair.metalAtom.element} ${dShellNum}d_π Back-Donor (${dShellNum}dxz)`,
+          fragmentName: `${dcdAlkenePair.metalAtom.element} d-Manifold (DCD)`,
+          energy: Number(((primProps.vsieD ?? -10.5) + 0.85).toFixed(2)),
+          irrep: secondIrrepLower,
+          degeneracy: 1,
+          electrons: 2,
+        },
+        {
+          id: 'frag_dcd_m_dnb',
+          side: 'left',
+          label: `${dcdAlkenePair.metalAtom.element} ${dShellNum}d Non-Bonding (${dShellNum}dz², ${dShellNum}dxy, ${dShellNum}dyz)`,
+          fragmentName: `${dcdAlkenePair.metalAtom.element} d-Manifold (DCD)`,
+          energy: Number(((primProps.vsieD ?? -10.5) - 0.6).toFixed(2)),
+          irrep: `${firstIrrepLower} + ${lastIrrepLower}`,
+          degeneracy: 3,
+          electrons: 6,
+        },
+        {
+          id: 'frag_dcd_m_dsigma',
+          side: 'left',
+          label: `${dcdAlkenePair.metalAtom.element} ${dShellNum}d_σ Acceptor (${dShellNum}dx²−y² / ${primShell}s)`,
+          fragmentName: `${dcdAlkenePair.metalAtom.element} d-Manifold (DCD)`,
+          energy: Number(((primProps.vsieD ?? -10.5) + 2.8).toFixed(2)),
+          irrep: firstIrrepLower,
+          degeneracy: 1,
+          electrons: 0,
+        },
+        {
+          id: 'frag_dcd_alkene_pi',
+          side: 'right',
+          label: 'Alkene π(C=C) σ-Donor',
+          fragmentName: 'η²-Alkene Ligand (DCD)',
+          energy: -10.51,
+          irrep: firstIrrepLower,
+          degeneracy: 1,
+          electrons: 2,
+        },
+        {
+          id: 'frag_dcd_alkene_pistar',
+          side: 'right',
+          label: 'Alkene π*(C=C) π-Acceptor',
+          fragmentName: 'η²-Alkene Ligand (DCD)',
+          energy: -7.2,
+          irrep: secondIrrepLower,
+          degeneracy: 1,
+          electrons: 0,
+        },
+        {
+          id: 'frag_right_salc',
+          side: 'right',
+          label: `Co-Ligand ${dcdAlkenePair.coDonor?.element || 'L'} σ/π SALCs`,
+          fragmentName: 'Ancillary Co-Ligands',
+          energy:
+            ELEMENT_PROPERTIES[dcdAlkenePair.coDonor?.element || 'Cl']?.vsieP ?? periphProps.vsieP,
+          irrep: `${firstIrrepLower} + ${lastIrrepLower}`,
+          degeneracy: 3,
+          electrons: 6,
+        },
+      ]
+    : [
+        {
+          id: 'frag_left_s',
+          side: 'left',
+          label: `${primaryAtom?.element || 'C'} ${primShell}s`,
+          fragmentName: `${primaryAtom?.element || 'Core'} Valence`,
+          energy: primProps.vsieS,
+          irrep: firstIrrepLower,
+          degeneracy: 1,
+          electrons: 2,
+        },
+        {
+          id: 'frag_left_p',
+          side: 'left',
+          label: `${primaryAtom?.element || 'C'} ${primShell}p (σ / π)`,
+          fragmentName: `${primaryAtom?.element || 'Core'} Valence`,
+          energy: primProps.vsieP,
+          irrep: secondIrrepLower,
+          degeneracy: 3,
+          electrons: Math.max(0, Math.min(6, primProps.valenceElectrons - 2)),
+        },
+        ...(primIsLn
+          ? [
+              {
+                id: 'frag_left_f',
+                side: 'left' as const,
+                label: `${primaryAtom?.element} 4f`,
+                fragmentName: `${primaryAtom?.element} 4f/5d Shell`,
+                energy: primProps.vsieF ?? -12.5,
+                irrep: secondIrrepLower,
+                degeneracy: 7,
+                electrons: Math.max(0, primProps.valenceElectrons - 2),
+              },
+              {
+                id: 'frag_left_d',
+                side: 'left' as const,
+                label: `${primaryAtom?.element} 5d`,
+                fragmentName: `${primaryAtom?.element} 4f/5d Shell`,
+                energy: primProps.vsieD ?? -8.0,
+                irrep: firstIrrepLower,
+                degeneracy: 5,
+                electrons: 1,
+              },
+            ]
+          : primIsTm
+            ? [
+                {
+                  id: 'frag_left_d',
+                  side: 'left' as const,
+                  label: `${primaryAtom?.element} ${dShellNum}d`,
+                  fragmentName: `${primaryAtom?.element} d-Manifold`,
+                  energy: primProps.vsieD ?? -10.5,
+                  irrep: `${firstIrrepLower} + ${secondIrrepLower}`,
+                  degeneracy: 5,
+                  electrons: Math.max(1, primProps.valenceElectrons - 2),
+                },
+              ]
+            : []),
+        {
+          id: 'frag_right_salc',
+          side: 'right',
+          label:
+            peripheralAtom?.element === 'H'
+              ? 'Ligand H 1s SALCs'
+              : `Ligand ${peripheralAtom?.element || 'L'} ${periphShell}p SALCs`,
+          fragmentName: 'Substituent SALCs',
+          energy: peripheralAtom?.element === 'H' ? periphProps.vsieS : periphProps.vsieP,
+          irrep: `${firstIrrepLower} + ${lastIrrepLower}`,
+          degeneracy: 2,
+          electrons: 2,
+        },
+      ];
 
   // Select all valence MOs when N <= 14 (e.g. C2H4 with 12 AOs), or a frontier window for larger systems without slicing degenerate doublets or triplets
   const EffectiveTotalElectrons = Math.max(1, Math.min(N * 2, neutralElectrons - charge));
@@ -3413,14 +5719,173 @@ export function analyzeMolecularGraph(
       isHOMO: idx === homoIdx,
       isLUMO: idx === homoIdx + 1,
       degenerateGroup,
-      correlatedFragmentIds: isPi
-        ? ['frag_left_p', 'frag_right_salc']
-        : energy < -16
-          ? ['frag_left_s', 'frag_right_salc']
-          : ['frag_left_p', 'frag_right_salc'],
+      correlatedFragmentIds: dcdAlkenePair
+        ? isPi
+          ? ['frag_dcd_m_dpi', 'frag_dcd_alkene_pistar']
+          : bondingType === 'non-bonding'
+            ? ['frag_dcd_m_dnb']
+            : ['frag_dcd_m_dsigma', 'frag_dcd_alkene_pi']
+        : isPi
+          ? ['frag_left_p', 'frag_right_salc']
+          : energy < -16
+            ? ['frag_left_s', 'frag_right_salc']
+            : ['frag_left_p', 'frag_right_salc'],
       lcao,
       description: `Extended Hückel LCAO-MO (${interactionType}, ${lowerIrrepSym} symmetry) computed at ε = ${energy.toFixed(2)} eV with ${signChanges} internuclear nodal surface(s).`,
     });
+  }
+
+  // Enrich Dewar-Chatt-Duncanson (DCD) molecular orbitals for any transition-metal η²-alkene complex
+  if (dcdAlkenePair && molecularOrbitals.length >= 4) {
+    const { metalAtom, c1, c2 } = dcdAlkenePair;
+    const mx = 0.5 * (c1.x3d + c2.x3d) - metalAtom.x3d;
+    const my = 0.5 * (c1.y3d + c2.y3d) - metalAtom.y3d;
+    const mz = 0.5 * (c1.z3d + c2.z3d) - metalAtom.z3d;
+    const mLen = Math.hypot(mx, my, mz) || 1;
+    const ux = mx / mLen;
+    const uy = my / mLen;
+    const uz = mz / mLen;
+
+    const wx = c2.x3d - c1.x3d;
+    const wy = c2.y3d - c1.y3d;
+    const wz = c2.z3d - c1.z3d;
+    const wLen = Math.hypot(wx, wy, wz) || 1;
+    const wux = wx / wLen;
+    const wuy = wy / wLen;
+    const wuz = wz / wLen;
+
+    const pOrbAlongU: OrbitalBasisType =
+      Math.abs(ux) >= Math.abs(uy) && Math.abs(ux) >= Math.abs(uz)
+        ? 'px'
+        : Math.abs(uy) >= Math.abs(uz)
+          ? 'py'
+          : 'pz';
+    const dSigmaOrb: OrbitalBasisType = Math.abs(uz) > 0.7 ? 'dz2' : 'dx2y2';
+    const xzScore = Math.abs(ux * wuz + uz * wux);
+    const yzScore = Math.abs(uy * wuz + uz * wuy);
+    const dPiOrb: OrbitalBasisType =
+      xzScore >= yzScore && xzScore >= 0.3 ? 'dxz' : yzScore >= 0.3 ? 'dyz' : 'dxy';
+
+    const occupiedMos = molecularOrbitals.filter((m) => m.occupancy > 0);
+    const virtualMos = molecularOrbitals.filter((m) => m.occupancy === 0);
+
+    // 1. DCD μ/σ-Donation Bonding MO (lowest occupied frontier MO)
+    const sigmaDonMo = occupiedMos[0];
+    if (sigmaDonMo) {
+      sigmaDonMo.label = `1${firstIrrepLower} (DCD μ/σ-Don)`;
+      sigmaDonMo.irrepSymbol = firstIrrepLower;
+      sigmaDonMo.bondingType = 'bonding';
+      sigmaDonMo.interactionType = 'σ';
+      sigmaDonMo.correlatedFragmentIds = ['frag_dcd_m_dsigma', 'frag_dcd_alkene_pi'];
+      sigmaDonMo.lcao = [
+        {
+          atomId: metalAtom.id,
+          element: metalAtom.element,
+          orbital: dSigmaOrb,
+          label: `${metalAtom.id} ${dShellNum}${dSigmaOrb === 'dx2y2' ? 'dx2-y2' : dSigmaOrb}`,
+          coeff: 0.48,
+        },
+        {
+          atomId: metalAtom.id,
+          element: metalAtom.element,
+          orbital: 's',
+          label: `${metalAtom.id} ${primShell}s`,
+          coeff: 0.24,
+        },
+        {
+          atomId: c1.id,
+          element: 'C',
+          orbital: pOrbAlongU,
+          label: `${c1.id} 2${pOrbAlongU}`,
+          coeff: -0.46,
+        },
+        {
+          atomId: c2.id,
+          element: 'C',
+          orbital: pOrbAlongU,
+          label: `${c2.id} 2${pOrbAlongU}`,
+          coeff: -0.46,
+        },
+      ];
+      sigmaDonMo.description = `Dewar–Chatt–Duncanson σ-Donation MO (${firstIrrepLower}): Synergistic head-on donation from the filled alkene π(C=C) bonding orbital (${c1.id}+${c2.id} 2${pOrbAlongU}) into the empty ${metalAtom.element} ${dShellNum}${dSigmaOrb === 'dx2y2' ? 'dx²−y²' : dSigmaOrb}/${primShell}s acceptor hybrid.`;
+    }
+
+    // 2. DCD π-Backbonding Bonding MO (sub-HOMO occupied d_π -> π* orbital)
+    const backbondMo =
+      occupiedMos.length >= 3 ? occupiedMos[occupiedMos.length - 2] : occupiedMos[occupiedMos.length - 1];
+    if (backbondMo && backbondMo !== sigmaDonMo) {
+      backbondMo.label = `1${secondIrrepLower} (DCD π-Back)`;
+      backbondMo.irrepSymbol = secondIrrepLower;
+      backbondMo.bondingType = 'bonding';
+      backbondMo.interactionType = 'π';
+      backbondMo.correlatedFragmentIds = ['frag_dcd_m_dpi', 'frag_dcd_alkene_pistar'];
+      backbondMo.lcao = [
+        {
+          atomId: metalAtom.id,
+          element: metalAtom.element,
+          orbital: dPiOrb,
+          label: `${metalAtom.id} ${dShellNum}${dPiOrb}`,
+          coeff: 0.62,
+        },
+        {
+          atomId: c1.id,
+          element: 'C',
+          orbital: pOrbAlongU,
+          label: `${c1.id} 2${pOrbAlongU}`,
+          coeff: 0.42,
+        },
+        {
+          atomId: c2.id,
+          element: 'C',
+          orbital: pOrbAlongU,
+          label: `${c2.id} 2${pOrbAlongU}`,
+          coeff: -0.42,
+        },
+      ];
+      backbondMo.description = `Dewar–Chatt–Duncanson π-Backbonding MO (${secondIrrepLower}): Side-on d_π → π*(C=C) back-donation from filled ${metalAtom.element} ${dShellNum}${dPiOrb} into the empty alkene π* antibonding orbital, strengthening ${metalAtom.element}–C bonding while elongating C=C (1.376 Å) and bending substituents back.`;
+    }
+
+    // 3. DCD σ* LUMO and π* Backbonding Antibonding MOs
+    const lumoMo = virtualMos[0];
+    if (lumoMo) {
+      lumoMo.label = `2${firstIrrepLower}* (DCD σ* LUMO)`;
+      lumoMo.bondingType = 'antibonding';
+      lumoMo.interactionType = 'σ*';
+      lumoMo.correlatedFragmentIds = ['frag_dcd_m_dsigma', 'frag_dcd_alkene_pi', 'frag_right_salc'];
+      lumoMo.description = `Dewar–Chatt–Duncanson σ* Antibonding LUMO (${firstIrrepLower}*): Out-of-phase antibonding combination of ${metalAtom.element} ${dShellNum}${dSigmaOrb === 'dx2y2' ? 'dx²−y²' : dSigmaOrb} with the alkene π(C=C) σ-donor and co-ligand σ SALCs.`;
+    }
+    const piStarMo = virtualMos.length >= 2 ? virtualMos[1] : undefined;
+    if (piStarMo) {
+      piStarMo.label = `2${secondIrrepLower}* (DCD π*-Back)`;
+      piStarMo.irrepSymbol = secondIrrepLower;
+      piStarMo.bondingType = 'antibonding';
+      piStarMo.interactionType = 'π*';
+      piStarMo.correlatedFragmentIds = ['frag_dcd_m_dpi', 'frag_dcd_alkene_pistar'];
+      piStarMo.lcao = [
+        {
+          atomId: c1.id,
+          element: 'C',
+          orbital: pOrbAlongU,
+          label: `${c1.id} 2${pOrbAlongU}`,
+          coeff: 0.56,
+        },
+        {
+          atomId: c2.id,
+          element: 'C',
+          orbital: pOrbAlongU,
+          label: `${c2.id} 2${pOrbAlongU}`,
+          coeff: -0.56,
+        },
+        {
+          atomId: metalAtom.id,
+          element: metalAtom.element,
+          orbital: dPiOrb,
+          label: `${metalAtom.id} ${dShellNum}${dPiOrb}`,
+          coeff: -0.48,
+        },
+      ];
+      piStarMo.description = `Dewar–Chatt–Duncanson π* Antibonding MO (${secondIrrepLower}*): Out-of-phase antibonding counterpart of the ${metalAtom.element} ${dShellNum}${dPiOrb} → alkene π*(C=C) backbonding interaction.`;
+    }
   }
 
   // Compute physical net bond order (accounting for 3c-4e hypervalent lone pairs when present)
@@ -3449,12 +5914,16 @@ export function analyzeMolecularGraph(
       pg.id === 'D6h' || pg.id === 'Td' || pg.id === 'Oh' || pg.id === 'Dinfh' || pg.id === 'D2h' || pg.id === 'D3h' || pg.id === 'D4h'
         ? 0.0
         : 1.42,
-    leftFragmentTitle: primIsLn
-      ? `Central ${primaryAtom?.element || 'Skeleton'} (4f, 5d, 6s)`
-      : primIsTm
-        ? `Central ${primaryAtom?.element || 'Skeleton'} (${Math.max(3, Number(primShell) - 1)}d, ${primShell}s, ${primShell}p)`
-        : `Central ${primaryAtom?.element || 'Skeleton'} (${primShell}s, ${primShell}p)`,
-    rightFragmentTitle: `Peripheral ${peripheralAtom?.element || 'Ligand'} SALCs`,
+    leftFragmentTitle: dcdAlkenePair
+      ? `Metal ${primaryAtom?.element || 'M'} (${dShellNum}d, ${primShell}s, ${primShell}p — DCD)`
+      : primIsLn
+        ? `Central ${primaryAtom?.element || 'Skeleton'} (4f, 5d, 6s)`
+        : primIsTm
+          ? `Central ${primaryAtom?.element || 'Skeleton'} (${dShellNum}d, ${primShell}s, ${primShell}p)`
+          : `Central ${primaryAtom?.element || 'Skeleton'} (${primShell}s, ${primShell}p)`,
+    rightFragmentTitle: dcdAlkenePair
+      ? `η²-Alkene (π / π*) & Co-Ligand SALCs`
+      : `Peripheral ${peripheralAtom?.element || 'Ligand'} SALCs`,
     atoms: centeredAtoms,
     bonds,
     fragmentOrbitals,

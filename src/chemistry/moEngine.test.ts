@@ -11,6 +11,7 @@ import {
   detectPointGroup,
   evaluateOrbitalWavefunction,
   jacobiEigenvalues,
+  parseChemicalInputToGraph,
   reconstruct3DGeometryFromVSEPR,
 } from './moEngine.ts';
 import {
@@ -170,6 +171,7 @@ test('Point group detection, VSEPR 3D reconstruction, and edge-case implicit-H r
     PtCl4: 'D4h',
     CrCl6: 'Oh',
     CeCl6: 'Oh',
+    C2H4Cl3Pt: 'C2v',
   };
 
   for (const mol of CANONICAL_MOLECULES) {
@@ -895,9 +897,7 @@ test('Multi-center polycyclic aromatics (Coronene D6h, Triphenylene D3h, Naphtha
   assert.equal(detectPointGroup(hc3nAtoms, hc3nBonds), 'Cinfv', 'Cyanoacetylene (HC3N) must be Cinfv');
 });
 
-test('Long-chain alkanes (dodecane, hexadecane, eicosane), fatty acids (stearic acid), branched terpenoids (pristane), and cycloalkanes (cyclohexane) reconstruct true 3D tetrahedral sp3 carbon geometry (~109.5°)', async () => {
-  const { parseChemicalInputToGraph } = await import('./moEngine.ts');
-
+test('Long-chain alkanes (dodecane, hexadecane, eicosane), fatty acids (stearic acid), branched terpenoids (pristane), and cycloalkanes (cyclohexane) reconstruct true 3D tetrahedral sp3 carbon geometry (~109.5°)', () => {
   const computeMeanTetrahedralAngles = (entry: ReturnType<typeof analyzeMolecularGraph>) => {
     const sp3Carbons = entry.atoms.filter((a) => {
       if (a.element !== 'C') return false;
@@ -989,3 +989,424 @@ test('Long-chain alkanes (dodecane, hexadecane, eicosane), fatty acids (stearic 
   assert.ok(prStats.maxCarbonZ > 1.0, `Expected out-of-plane tetrahedral methyl branches > 1.0 Å, got ${prStats.maxCarbonZ}`);
   assert.ok(Math.abs(prStats.meanHCH - 109.47) < 1.0);
 });
+
+test("Complexes with complex ligands (Wilkinson's catalyst, Vaska's complex, Pd(PPh3)4, Cisplatin, [Co(en)3]3+, [Ru(bpy)3]2+, Fe(acac)3, [Fe(C2O4)3]3-, Ni(dmgH)2, Ferrocene, Nitroprusside dihydrate, Zeise's salt) connect via true donor atoms and assign accurate 3D geometry & point groups", () => {
+  const pph3 = 'C1=CC=C(C=C1)P(C2=CC=CC=C2)C3=CC=CC=C3';
+
+  // 1. Wilkinson's Catalyst: Chlorotris(triphenylphosphine)rhodium(I), [RhCl(PPh3)3]
+  const wilkinsonGraph = parseChemicalInputToGraph(
+    `${pph3}.${pph3}.${pph3}.[Cl-].[Rh+]`,
+    'SMILES'
+  )!;
+  const wilkinson = analyzeMolecularGraph(wilkinsonGraph.atoms, wilkinsonGraph.bonds, {
+    customName: "Wilkinson's Catalyst",
+  });
+  const rhAtom = wilkinson.atoms.find((a) => a.element === 'Rh')!;
+  assert.ok(rhAtom, "Wilkinson's catalyst must contain Rh center");
+  const rhPartners = wilkinson.bonds
+    .filter((b) => b.source === rhAtom.id || b.target === rhAtom.id)
+    .map((b) => wilkinson.atoms.find((a) => a.id === (b.source === rhAtom.id ? b.target : b.source))!.element)
+    .sort();
+  assert.deepEqual(
+    rhPartners,
+    ['Cl', 'P', 'P', 'P'],
+    "Rh in Wilkinson's catalyst must bond exclusively to Cl + 3 P donors (not phenyl carbons)"
+  );
+  assert.equal(
+    wilkinson.pointGroupId,
+    'C2v',
+    "Wilkinson's catalyst (d8 square-planar ML3X) must have C2v symmetry"
+  );
+  const wilkinsonMaxZ = Math.max(...wilkinson.atoms.map((a) => Math.abs(a.z3d)));
+  assert.ok(
+    wilkinsonMaxZ > 1.5,
+    `Expected 3D tetrahedral propeller phenyl rings on -PPh3 (max |z3d| = ${wilkinsonMaxZ})`
+  );
+  const hasRh4d = wilkinson.molecularOrbitals.some((mo) =>
+    mo.lcao.some(
+      (c) =>
+        c.atomId === rhAtom.id &&
+        ['dz2', 'dx2y2', 'dxy', 'dxz', 'dyz'].includes(c.orbital)
+    )
+  );
+  assert.ok(hasRh4d, "Wilkinson's catalyst MO basis must retain Rh 4d orbitals");
+
+  // 2. Vaska's Complex: trans-[IrCl(CO)(PPh3)2]
+  const vaskaGraph = parseChemicalInputToGraph(
+    `[C-]#[O+].${pph3}.${pph3}.[Cl-].[Ir+]`,
+    'SMILES'
+  )!;
+  const vaska = analyzeMolecularGraph(vaskaGraph.atoms, vaskaGraph.bonds);
+  const irAtom = vaska.atoms.find((a) => a.element === 'Ir')!;
+  const irPartners = vaska.bonds
+    .filter((b) => b.source === irAtom.id || b.target === irAtom.id)
+    .map((b) => vaska.atoms.find((a) => a.id === (b.source === irAtom.id ? b.target : b.source))!.element)
+    .sort();
+  assert.deepEqual(irPartners, ['C', 'Cl', 'P', 'P'], "Vaska's complex Ir must bond to C(O), Cl, and 2 P");
+  assert.equal(vaska.pointGroupId, 'C2v', "Vaska's complex (trans-ML2XY) must have C2v symmetry");
+
+  // 3. Tetrakis(triphenylphosphine)palladium(0): Pd(PPh3)4 (d10 tetrahedral -> Td)
+  const pdPPh3_4Graph = parseChemicalInputToGraph(
+    `${pph3}.${pph3}.${pph3}.${pph3}.[Pd]`,
+    'SMILES'
+  )!;
+  const pdPPh3_4 = analyzeMolecularGraph(pdPPh3_4Graph.atoms, pdPPh3_4Graph.bonds);
+  const pdAtom = pdPPh3_4.atoms.find((a) => a.element === 'Pd')!;
+  const pdPartners = pdPPh3_4.bonds
+    .filter((b) => b.source === pdAtom.id || b.target === pdAtom.id)
+    .map((b) => pdPPh3_4.atoms.find((a) => a.id === (b.source === pdAtom.id ? b.target : b.source))!.element);
+  assert.deepEqual(pdPartners, ['P', 'P', 'P', 'P'], 'Pd(PPh3)4 must connect all 4 PPh3 ligands via P');
+  assert.equal(pdPPh3_4.pointGroupId, 'Td', 'Pd(PPh3)4 (d10 M0L4) must have Td symmetry');
+
+  // 4. Cisplatin: cis-[PtCl2(NH3)2]
+  const cisplatinGraph = parseChemicalInputToGraph('N.N.Cl[Pt]Cl', 'SMILES')!;
+  const cisplatin = analyzeMolecularGraph(cisplatinGraph.atoms, cisplatinGraph.bonds);
+  const ptAtom = cisplatin.atoms.find((a) => a.element === 'Pt')!;
+  const ptPartners = cisplatin.bonds
+    .filter((b) => b.source === ptAtom.id || b.target === ptAtom.id)
+    .map((b) => cisplatin.atoms.find((a) => a.id === (b.source === ptAtom.id ? b.target : b.source))!.element)
+    .sort();
+  assert.deepEqual(ptPartners, ['Cl', 'Cl', 'N', 'N']);
+  assert.equal(cisplatin.pointGroupId, 'C2v', 'Cisplatin must have C2v symmetry');
+
+  // 5. Tris-bidentate octahedral propeller chelates: [Co(en)3]3+, [Ru(bpy)3]2+, Fe(acac)3, [Fe(C2O4)3]3- -> D3
+  const coEn3Graph = parseChemicalInputToGraph('C(CN)N.C(CN)N.C(CN)N.[Co+3]', 'SMILES')!;
+  const coEn3 = analyzeMolecularGraph(coEn3Graph.atoms, coEn3Graph.bonds, { charge: 3 });
+  assert.equal(coEn3.pointGroupId, 'D3', '[Co(en)3]3+ must have D3 tris-chelate propeller symmetry');
+  const coAtom = coEn3.atoms.find((a) => a.element === 'Co')!;
+  assert.equal(
+    coEn3.bonds.filter((b) => b.source === coAtom.id || b.target === coAtom.id).length,
+    6,
+    '[Co(en)3]3+ must form 6 Co-N chelate bonds'
+  );
+
+  const bpy = 'C1=CC=NC(=C1)C2=CC=CC=N2';
+  const ruBpy3Graph = parseChemicalInputToGraph(`${bpy}.${bpy}.${bpy}.[Ru+2]`, 'SMILES')!;
+  const ruBpy3 = analyzeMolecularGraph(ruBpy3Graph.atoms, ruBpy3Graph.bonds, { charge: 2 });
+  assert.equal(ruBpy3.pointGroupId, 'D3', '[Ru(bpy)3]2+ must have D3 tris-chelate propeller symmetry');
+  const ruAtom = ruBpy3.atoms.find((a) => a.element === 'Ru')!;
+  assert.equal(
+    ruBpy3.bonds.filter((b) => b.source === ruAtom.id || b.target === ruAtom.id).length,
+    6,
+    '[Ru(bpy)3]2+ must form 6 Ru-N chelate bonds'
+  );
+
+  const feAcac3Graph = parseChemicalInputToGraph(
+    'CC(=CC(=O)C)[O-].CC(=CC(=O)C)[O-].CC(=CC(=O)C)[O-].[Fe+3]',
+    'SMILES'
+  )!;
+  const feAcac3 = analyzeMolecularGraph(feAcac3Graph.atoms, feAcac3Graph.bonds);
+  assert.equal(feAcac3.pointGroupId, 'D3', 'Fe(acac)3 must have D3 symmetry');
+
+  const feOx3Graph = parseChemicalInputToGraph(
+    'C(=O)(C(=O)[O-])[O-].C(=O)(C(=O)[O-])[O-].C(=O)(C(=O)[O-])[O-].[Fe+3]',
+    'SMILES'
+  )!;
+  const feOx3 = analyzeMolecularGraph(feOx3Graph.atoms, feOx3Graph.bonds, { charge: -3 });
+  assert.equal(feOx3.pointGroupId, 'D3', '[Fe(C2O4)3]3- must have D3 symmetry');
+
+  // 6. Square-planar chelates: Ni(dmgH)2 -> D2h, Oxaliplatin -> C2v
+  const niDmg2Graph = parseChemicalInputToGraph(
+    'CC(=NO)C(=NO)C.CC(=NO)C(=NO)C.[Ni]',
+    'SMILES'
+  )!;
+  const niDmg2 = analyzeMolecularGraph(niDmg2Graph.atoms, niDmg2Graph.bonds);
+  assert.equal(niDmg2.pointGroupId, 'D2h', 'Ni(dmgH)2 must have D2h symmetry');
+
+  const oxaliplatinGraph = parseChemicalInputToGraph(
+    'C1CCC(C(C1)N)N.C(=O)(C(=O)O)O.[Pt]',
+    'SMILES'
+  )!;
+  const oxaliplatin = analyzeMolecularGraph(oxaliplatinGraph.atoms, oxaliplatinGraph.bonds);
+  assert.equal(oxaliplatin.pointGroupId, 'C2v', 'Oxaliplatin must have C2v symmetry');
+
+  // 7. Metallocene sandwich complexes: Ferrocene Fe(C5H5)2 -> D5d
+  const ferroceneGraph = parseChemicalInputToGraph(
+    '[CH-]1C=CC=C1.[CH-]1C=CC=C1.[Fe+2]',
+    'SMILES'
+  )!;
+  const ferrocene = analyzeMolecularGraph(ferroceneGraph.atoms, ferroceneGraph.bonds);
+  assert.equal(ferrocene.pointGroupId, 'D5d', 'Ferrocene Fe(C5H5)2 must have D5d staggered sandwich symmetry');
+  const feSandwich = ferrocene.atoms.find((a) => a.element === 'Fe')!;
+  assert.equal(
+    ferrocene.bonds.filter((b) => b.source === feSandwich.id || b.target === feSandwich.id).length,
+    10,
+    'Ferrocene must have 10 η5 Fe-C coordination bonds'
+  );
+
+  // 8. Hydrated & η2-alkene complexes: Sodium nitroprusside dihydrate (-> C4v) & Zeise's salt (-> C2v)
+  const nitroprussideGraph = parseChemicalInputToGraph(
+    '[C-]#N.[C-]#N.[C-]#N.[C-]#N.[C-]#N.N#[O+].O.O.[Fe-2]',
+    'SMILES'
+  )!;
+  const nitroprusside = analyzeMolecularGraph(nitroprussideGraph.atoms, nitroprussideGraph.bonds, {
+    charge: -2,
+  });
+  assert.equal(
+    nitroprusside.pointGroupId,
+    'C4v',
+    'Nitroprusside dihydrate must strip uncoordinated lattice .2H2O and yield C4v [Fe(CN)5(NO)]2-'
+  );
+
+  const zeiseGraph = parseChemicalInputToGraph('C=C.O.Cl[Pt-](Cl)Cl', 'SMILES')!;
+  const zeise = analyzeMolecularGraph(zeiseGraph.atoms, zeiseGraph.bonds, { charge: -1 });
+  assert.equal(
+    zeise.pointGroupId,
+    'C2v',
+    "Zeise's salt [PtCl3(C2H4)]- must strip lattice .H2O, coordinate ethylene, and yield C2v symmetry"
+  );
+});
+
+test("Dewar-Chatt-Duncanson (DCD) model for transition-metal η²-alkene complexes (Zeise's salt [PtCl3(η²-C2H4)]⁻, [PdCl3(η²-C2H4)]⁻, and custom sketches)", () => {
+  // 1. Disconnected Zeise's salt monohydrate SMILES: C=C.O.Cl[Pt-](Cl)Cl.[K+]
+  const zeiseParsed = parseChemicalInputToGraph('C=C.O.Cl[Pt-](Cl)Cl.[K+]', 'SMILES')!;
+  const zeise = analyzeMolecularGraph(zeiseParsed.atoms, zeiseParsed.bonds);
+  assert.equal(zeise.pointGroupId, 'C2v', "Zeise's salt must have C2v symmetry");
+
+  const pt = zeise.atoms.find((a) => a.element === 'Pt')!;
+  const carbons = zeise.atoms.filter((a) => a.element === 'C');
+  const hydrogens = zeise.atoms.filter((a) => a.element === 'H');
+  assert.equal(carbons.length, 2, 'Ethylene ligand must have 2 carbons');
+  assert.equal(hydrogens.length, 4, 'Ethylene ligand must have 4 hydrogens');
+
+  // Verify η² dihapto coordination: Pt is bonded to BOTH C1 and C2 of ethylene (plus 3 Cl = 5 bonds total)
+  const ptBonds = zeise.bonds.filter((b) => b.source === pt.id || b.target === pt.id);
+  assert.equal(
+    ptBonds.length,
+    5,
+    'Pt in Zeise’s salt must have 5 coordination bonds (3 Pt-Cl + 2 η² Pt-C bonds)'
+  );
+  for (const c of carbons) {
+    const hasPtCBond = ptBonds.some((b) => b.source === c.id || b.target === c.id);
+    assert.ok(hasPtCBond, `Alkene carbon ${c.id} must be η²-coordinated to Pt`);
+  }
+
+  // Verify 3D Dewar-Chatt-Duncanson geometry:
+  // (a) C=C bond axis is perpendicular to the PtCl3 xy plane (|Δz(C1,C2)| ≈ 1.376 Å, elongated from 1.339 Å)
+  const [c1, c2] = carbons;
+  const dzCC = Math.abs(c2.z3d - c1.z3d);
+  const rCC = Math.hypot(c2.x3d - c1.x3d, c2.y3d - c1.y3d, c2.z3d - c1.z3d);
+  assert.ok(
+    dzCC > 1.30 && Math.abs(rCC - 1.376) < 0.02,
+    `Expected perpendicular elongated C=C bond (~1.376 Å along z), got r(C=C)=${rCC.toFixed(3)} Å, |Δz|=${dzCC.toFixed(3)} Å`
+  );
+  // (b) All 4 C-H bonds bend back away from Pt (metallacyclopropane pyramidalization)
+  const meanCx = 0.5 * (c1.x3d + c2.x3d);
+  const ptToSign = Math.sign(meanCx - pt.x3d) || 1;
+  for (const h of hydrogens) {
+    assert.ok(
+      (h.x3d - meanCx) * ptToSign > 0.2,
+      `Hydrogen ${h.id} must bend back away from Pt (x_H=${h.x3d}, x_C=${meanCx})`
+    );
+  }
+
+  // Verify Dewar-Chatt-Duncanson Fragment Orbitals
+  const fragIds = new Set(zeise.fragmentOrbitals.map((f) => f.id));
+  assert.ok(fragIds.has('frag_dcd_m_dpi'), 'Must include Metal d_π Back-Donor fragment orbital');
+  assert.ok(fragIds.has('frag_dcd_m_dsigma'), 'Must include Metal d_σ Acceptor fragment orbital');
+  assert.ok(fragIds.has('frag_dcd_alkene_pi'), 'Must include Alkene π(C=C) σ-Donor fragment orbital');
+  assert.ok(
+    fragIds.has('frag_dcd_alkene_pistar'),
+    'Must include Alkene π*(C=C) π-Acceptor fragment orbital'
+  );
+
+  // Verify Dewar-Chatt-Duncanson Molecular Orbitals (μ/σ-Donation + d_π -> π* Backbonding)
+  const sigmaDonMo = zeise.molecularOrbitals.find((m) => m.label.includes('DCD μ/σ-Don'))!;
+  assert.ok(sigmaDonMo, 'Must include DCD μ/σ-Donation bonding MO');
+  assert.equal(sigmaDonMo.bondingType, 'bonding');
+  assert.equal(sigmaDonMo.interactionType, 'σ');
+  assert.ok(sigmaDonMo.correlatedFragmentIds.includes('frag_dcd_alkene_pi'));
+
+  const piBackMo = zeise.molecularOrbitals.find((m) => m.label.includes('DCD π-Back'))!;
+  assert.ok(piBackMo, 'Must include DCD π-Backbonding MO');
+  assert.equal(piBackMo.bondingType, 'bonding');
+  assert.equal(piBackMo.interactionType, 'π');
+  assert.ok(piBackMo.correlatedFragmentIds.includes('frag_dcd_alkene_pistar'));
+  // In the π-backbonding MO, C1 and C2 2px coefficients have opposite signs (π* antibonding character on C=C)
+  const c1Term = piBackMo.lcao.find((t) => t.atomId === c1.id && t.orbital === 'px')!;
+  const c2Term = piBackMo.lcao.find((t) => t.atomId === c2.id && t.orbital === 'px')!;
+  assert.ok(
+    c1Term && c2Term && c1Term.coeff * c2Term.coeff < 0,
+    'DCD π-backbonding MO must have opposite-sign 2p coefficients on C1 and C2 (alkene π* character)'
+  );
+
+  // 2. Dynamic non-canonical DCD complex: Palladium analogue [PdCl3(η²-C2H4)]⁻ and 2D sketcher single-bond completion
+  const pdSingleBondAtoms = [
+    { id: 'Pd1', element: 'Pd' as const, x2d: 0, y2d: 0, x3d: 0, y3d: 0, z3d: 0, formalCharge: -1 },
+    { id: 'Cl1', element: 'Cl' as const, x2d: -1.5, y2d: 0, x3d: -1.5, y3d: 0, z3d: 0 },
+    { id: 'Cl2', element: 'Cl' as const, x2d: 0, y2d: -1.5, x3d: 0, y3d: 1.5, z3d: 0 },
+    { id: 'Cl3', element: 'Cl' as const, x2d: 0, y2d: 1.5, x3d: 0, y3d: -1.5, z3d: 0 },
+    { id: 'C1', element: 'C' as const, x2d: 1.5, y2d: 0, x3d: 1.5, y3d: 0, z3d: 0 },
+    { id: 'C2', element: 'C' as const, x2d: 2.2, y2d: 1.0, x3d: 2.2, y3d: -1.0, z3d: 0 },
+  ];
+  // User only draws a single Pd1-C1 bond to C1=C2 in the 2D sketcher
+  const pdSingleBonds = [
+    { id: 'b1', source: 'Pd1', target: 'Cl1', order: 1 as const },
+    { id: 'b2', source: 'Pd1', target: 'Cl2', order: 1 as const },
+    { id: 'b3', source: 'Pd1', target: 'Cl3', order: 1 as const },
+    { id: 'b4', source: 'Pd1', target: 'C1', order: 1 as const },
+    { id: 'b5', source: 'C1', target: 'C2', order: 2 as const },
+  ];
+  const pdZeise = analyzeMolecularGraph(pdSingleBondAtoms, pdSingleBonds);
+  assert.equal(
+    pdZeise.pointGroupId,
+    'C2v',
+    '[PdCl3(η²-C2H4)]⁻ drawn with a single Pd-C bond must complete η² hapticity and yield C2v symmetry'
+  );
+  assert.ok(
+    pdZeise.bonds.some(
+      (b) => (b.source === 'Pd1' && b.target === 'C2') || (b.source === 'C2' && b.target === 'Pd1')
+    ),
+    'resolveCoordinationBonds must automatically complete the second η² Pd1-C2 bond'
+  );
+  assert.ok(
+    pdZeise.molecularOrbitals.some((m) => m.label.includes('DCD μ/σ-Don')),
+    '[PdCl3(η²-C2H4)]⁻ must generate DCD μ/σ-Donation MO'
+  );
+  assert.ok(
+    pdZeise.molecularOrbitals.some((m) => m.label.includes('DCD π-Back')),
+    '[PdCl3(η²-C2H4)]⁻ must generate DCD π-Backbonding MO'
+  );
+});
+
+test('Complexes with larger alkene, chelating diene (Ni(COD)2, Pt(COD)Cl2, Pt(nbd)Cl2), bis-arene (Cr(C6H6)2), piano-stool ((C6H6)Cr(CO)3), and multi-alkene (Ni(C2H4)3) ligands resolve all η²/η⁴/η⁶ bonds, 3D geometries, and point groups', () => {
+  // 1. Bis(1,5-cyclooctadiene)nickel(0) Ni(COD)2 -> D2d tetrahedral diolefin chelate with 8 Ni-C bonds
+  const niCod2Parsed = parseChemicalInputToGraph('C1CC=CCCC=C1.C1CC=CCCC=C1.[Ni]', 'SMILES')!;
+  const niCod2 = analyzeMolecularGraph(niCod2Parsed.atoms, niCod2Parsed.bonds);
+  assert.equal(
+    niCod2.pointGroupId,
+    'D2d',
+    'Bis(1,5-cyclooctadiene)nickel(0) Ni(COD)2 must have D2d symmetry'
+  );
+  const niAtom = niCod2.atoms.find((a) => a.element === 'Ni')!;
+  const niBonds = niCod2.bonds.filter((b) => b.source === niAtom.id || b.target === niAtom.id);
+  assert.equal(
+    niBonds.length,
+    8,
+    'Ni(COD)2 must have 8 Ni-C coordination bonds (both C=C double bonds on each of the two COD rings)'
+  );
+  assert.ok(
+    niCod2.fragmentOrbitals.some((f) => f.id === 'frag_dcd_m_dpi'),
+    'Ni(COD)2 must include Dewar-Chatt-Duncanson fragment orbitals'
+  );
+  assert.ok(
+    niCod2.molecularOrbitals.some((m) => m.label.includes('DCD π-Back')),
+    'Ni(COD)2 must include Dewar-Chatt-Duncanson π-Backbonding MO'
+  );
+
+  // Verify 3D geometry of Ni(COD)2 has no collapsed atoms and physical C-C bond lengths
+  const check3DGeometry = (mol: ReturnType<typeof analyzeMolecularGraph>, label: string) => {
+    const heavy = mol.atoms.filter((a) => a.element !== 'H');
+    let minHeavyDist = Infinity;
+    for (let i = 0; i < heavy.length; i++) {
+      for (let j = i + 1; j < heavy.length; j++) {
+        const d = Math.hypot(
+          heavy[i].x3d - heavy[j].x3d,
+          heavy[i].y3d - heavy[j].y3d,
+          (heavy[i].z3d || 0) - (heavy[j].z3d || 0)
+        );
+        if (d < minHeavyDist) minHeavyDist = d;
+      }
+    }
+    let maxCCDist = 0;
+    for (const b of mol.bonds) {
+      const a1 = mol.atoms.find((a) => a.id === b.source)!;
+      const a2 = mol.atoms.find((a) => a.id === b.target)!;
+      if (a1.element === 'C' && a2.element === 'C') {
+        const d = Math.hypot(
+          a1.x3d - a2.x3d,
+          a1.y3d - a2.y3d,
+          (a1.z3d || 0) - (a2.z3d || 0)
+        );
+        if (d > maxCCDist) maxCCDist = d;
+      }
+    }
+    assert.ok(
+      minHeavyDist >= 1.12,
+      `${label}: expected minHeavyDist >= 1.12 Å, got ${minHeavyDist.toFixed(3)} Å`
+    );
+    assert.ok(
+      maxCCDist <= 1.60,
+      `${label}: expected max C-C bond length <= 1.60 Å, got ${maxCCDist.toFixed(3)} Å`
+    );
+  };
+
+  check3DGeometry(niCod2, 'Ni(COD)2');
+
+  // 2. Square-planar chelating diene complexes: Pt(COD)Cl2, Pd(COD)Cl2, Pt(nbd)Cl2 -> C2v with 6 M-L bonds
+  for (const [name, smi] of [
+    ['Pt(COD)Cl2', 'C1CC=CCCC=C1.Cl[Pt]Cl'],
+    ['Pd(COD)Cl2', 'C1CC=CCCC=C1.Cl[Pd]Cl'],
+    ['Pt(nbd)Cl2', 'C1C2C=CC1C=C2.Cl[Pt]Cl'],
+  ] as const) {
+    const parsed = parseChemicalInputToGraph(smi, 'SMILES')!;
+    const mol = analyzeMolecularGraph(parsed.atoms, parsed.bonds);
+    assert.equal(mol.pointGroupId, 'C2v', `${name} must have C2v symmetry`);
+    const m = mol.atoms.find((a) => a.element === 'Pt' || a.element === 'Pd')!;
+    const mBonds = mol.bonds.filter((b) => b.source === m.id || b.target === m.id);
+    assert.equal(mBonds.length, 6, `${name} must have 6 metal-ligand bonds (4 M-C + 2 M-Cl)`);
+    check3DGeometry(mol, name);
+  }
+
+  // 3. Bis(benzene)chromium Cr(η⁶-C6H6)2 -> D6h with 12 Cr-C bonds
+  const crBz2Parsed = parseChemicalInputToGraph(
+    '[CH-]1[CH-][CH-][CH-][CH-][CH-]1.[CH-]1[CH-][CH-][CH-][CH-][CH-]1.[Cr]',
+    'SMILES'
+  )!;
+  const crBz2 = analyzeMolecularGraph(crBz2Parsed.atoms, crBz2Parsed.bonds);
+  assert.equal(crBz2.pointGroupId, 'D6h', 'Bis(benzene)chromium Cr(C6H6)2 must have D6h symmetry');
+  const crAtom = crBz2.atoms.find((a) => a.element === 'Cr')!;
+  const crBonds = crBz2.bonds.filter((b) => b.source === crAtom.id || b.target === crAtom.id);
+  assert.equal(crBonds.length, 12, 'Cr(C6H6)2 must have 12 Cr-C coordination bonds');
+  check3DGeometry(crBz2, 'Cr(C6H6)2');
+
+  // 4. Piano-stool complexes: (C6H6)Cr(CO)3 -> C3v, (C4H4)Fe(CO)3 -> Cs, (C4H6)Fe(CO)3 -> Cs
+  const bzCrCo3Parsed = parseChemicalInputToGraph(
+    'c1ccccc1.[C-]#[O+].[C-]#[O+].[C-]#[O+].[Cr]',
+    'SMILES'
+  )!;
+  const bzCrCo3 = analyzeMolecularGraph(bzCrCo3Parsed.atoms, bzCrCo3Parsed.bonds);
+  assert.equal(bzCrCo3.pointGroupId, 'C3v', '(C6H6)Cr(CO)3 must have C3v symmetry');
+  check3DGeometry(bzCrCo3, '(C6H6)Cr(CO)3');
+
+  const cbdFeCo3Parsed = parseChemicalInputToGraph(
+    'C1=CC=C1.[C-]#[O+].[C-]#[O+].[C-]#[O+].[Fe]',
+    'SMILES'
+  )!;
+  const cbdFeCo3 = analyzeMolecularGraph(cbdFeCo3Parsed.atoms, cbdFeCo3Parsed.bonds);
+  assert.equal(cbdFeCo3.pointGroupId, 'Cs', '(C4H4)Fe(CO)3 must have Cs symmetry');
+  check3DGeometry(cbdFeCo3, '(C4H4)Fe(CO)3');
+
+  const bdFeCo3Parsed = parseChemicalInputToGraph(
+    'C=CC=C.[C-]#[O+].[C-]#[O+].[C-]#[O+].[Fe]',
+    'SMILES'
+  )!;
+  const bdFeCo3 = analyzeMolecularGraph(bdFeCo3Parsed.atoms, bdFeCo3Parsed.bonds);
+  assert.equal(bdFeCo3.pointGroupId, 'Cs', '(C4H6)Fe(CO)3 must have Cs symmetry');
+  check3DGeometry(bdFeCo3, '(C4H6)Fe(CO)3');
+
+  // 5. Tris(ethylene)nickel(0) Ni(C2H4)3 -> D3h with 6 Ni-C bonds
+  const niEth3Parsed = parseChemicalInputToGraph('C=C.C=C.C=C.[Ni]', 'SMILES')!;
+  const niEth3 = analyzeMolecularGraph(niEth3Parsed.atoms, niEth3Parsed.bonds);
+  assert.equal(niEth3.pointGroupId, 'D3h', 'Ni(C2H4)3 must have D3h symmetry');
+  check3DGeometry(niEth3, 'Ni(C2H4)3');
+
+  // 6. Larger monodentate η²-alkene complexes (propene, 1-hexene, styrene, cyclohexene, norbornene) -> C2v
+  for (const [name, smi] of [
+    ['[PtCl3(propene)]-', 'CC=C.Cl[Pt-](Cl)Cl'],
+    ['[PtCl3(1-hexene)]-', 'CCCCC=C.Cl[Pt-](Cl)Cl'],
+    ['[PtCl3(styrene)]-', 'C=Cc1ccccc1.Cl[Pt-](Cl)Cl'],
+    ['[PtCl3(cyclohexene)]-', 'C1CCC=CC1.Cl[Pt-](Cl)Cl'],
+    ['[PtCl3(norbornene)]-', 'C1CC2CC1C=C2.Cl[Pt-](Cl)Cl'],
+  ] as const) {
+    const parsed = parseChemicalInputToGraph(smi, 'SMILES')!;
+    const mol = analyzeMolecularGraph(parsed.atoms, parsed.bonds, { charge: -1 });
+    assert.equal(mol.pointGroupId, 'C2v', `${name} must have C2v coordination symmetry`);
+    const pt = mol.atoms.find((a) => a.element === 'Pt')!;
+    const ptBonds = mol.bonds.filter((b) => b.source === pt.id || b.target === pt.id);
+    assert.equal(ptBonds.length, 5, `${name} must have 5 Pt-L bonds (3 Pt-Cl + 2 η² Pt-C)`);
+    check3DGeometry(mol, name);
+  }
+});
+
+

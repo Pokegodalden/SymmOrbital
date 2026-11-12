@@ -56,7 +56,7 @@ const PRESET_CATEGORIES: Record<PresetCategory, { label: string; formulas: strin
   },
   complexes: {
     label: 'd & f Coordination Complexes',
-    formulas: ['TiCl4', 'PtCl4', 'CrCl6', 'CeCl6'],
+    formulas: ['TiCl4', 'PtCl4', 'CrCl6', 'CeCl6', 'C2H4Cl3Pt'],
   },
   hypervalent: {
     label: 'Hypervalent & Lone-Pair VSEPR',
@@ -72,7 +72,7 @@ const PRESET_CATEGORIES: Record<PresetCategory, { label: string; formulas: strin
   },
   pi: {
     label: 'Conjugated π-Systems',
-    formulas: ['C2H4', 'CH2O', 'C6H6', 'C40H56'],
+    formulas: ['C2H4', 'CH2O', 'C6H6', 'C40H56', 'C2H4Cl3Pt'],
   },
   large: {
     label: 'Large molecules',

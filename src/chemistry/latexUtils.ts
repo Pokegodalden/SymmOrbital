@@ -180,6 +180,13 @@ export function moLabelToLatex(label: string): string {
   if (!m[2]) return mainPart;
 
   const parenRaw = m[2]
+    .replace(/DCD\s+μ\/σ-Don/g, '\\mathrm{DCD}\\;\\mu/\\sigma\\text{-Don}')
+    .replace(/DCD\s+π\*-Back/g, '\\mathrm{DCD}\\;\\pi^*\\text{-Back}')
+    .replace(/DCD\s+π-Back/g, '\\mathrm{DCD}\\;\\pi\\text{-Back}')
+    .replace(/DCD\s+σ\*\s+LUMO/g, '\\mathrm{DCD}\\;\\sigma^*\\;\\mathrm{LUMO}')
+    .replace(/DCD/g, '\\mathrm{DCD}')
+    .replace(/\s+HOMO/g, '\\;\\mathrm{HOMO}')
+    .replace(/\s+LUMO/g, '\\;\\mathrm{LUMO}')
     .replace(/HOMO/g, '\\mathrm{HOMO}')
     .replace(/LUMO/g, '\\mathrm{LUMO}')
     .replace(/(\d)dz²|(\d)dz2/g, '$1d_{z^2}')
@@ -191,7 +198,7 @@ export function moLabelToLatex(label: string): string {
     .replace(/(\d)fxyz/g, '$1f_{xyz}')
     .replace(/(\d)fz\(x²[−-]y²\)|(\d)fz\(x2-y2\)/g, '$1$2f_{z(x^2-y^2)}')
     .replace(/(\d)fx\(x²[−-]3y²\)|(\d)fx\(x2-3y2\)/g, '$1$2f_{x(x^2-3y^2)}')
-    .replace(/(\d)fy\(3x²[−-]y²\)|(\d)fy\(3x2-y2\)/g, '$1$2f_{y(3x^2-y^2)}')
+    .replace(/(\d)fy\(3x²[−-]y²\)|(\d)fy\(3x2-y2\)/g, '$1$2f_{y(3x^2-y2)}')
     .replace(/σ_dz²/g, '\\sigma_{d_{z^2}}')
     .replace(/σ_x²[−-]y²/g, '\\sigma_{x^2-y^2}')
     .replace(/σ_4fz³/g, '\\sigma_{4f_{z^3}}')
@@ -208,6 +215,7 @@ export function moLabelToLatex(label: string): string {
     .replace(/π/g, '\\pi')
     .replace(/σ/g, '\\sigma')
     .replace(/δ/g, '\\delta')
+    .replace(/μ/g, '\\mu ')
     .replace(/α/g, '\\alpha ')
     .replace(/β/g, '\\beta ')
     .replace(/γ/g, '\\gamma ');

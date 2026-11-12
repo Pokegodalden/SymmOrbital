@@ -235,6 +235,39 @@ export const POINT_GROUPS: Record<string, PointGroupData> = {
     ],
   },
 
+  D2d: {
+    id: 'D2d',
+    schoenflies: 'D2d',
+    name: 'Tetragonal Disphenoidal / Bis-Diene Chelate',
+    order: 8,
+    family: 'Dnd (Dihedral Antiprismatic)',
+    description: 'Contains an improper 4-fold S4 axis, a collinear C2(z) axis, two perpendicular C2\' axes, and two dihedral mirror planes σd bisecting the C2\' axes. Classic examples: Bis(1,5-cyclooctadiene)nickel(0) Ni(COD)2, Allene (H2C=C=CH2), Cyclooctatetraene (tub C8H8).',
+    classes: [
+      { id: 'E', symbol: 'E', operationType: 'E', count: 1, description: 'Identity operation' },
+      { id: '2S4', symbol: '2S4(z)', operationType: 'Sn', count: 2, description: '±90° improper rotary-reflections around the principal S4 axis' },
+      { id: 'C2z', symbol: 'C2(z)', operationType: 'Cn', count: 1, description: '180° rotation around the principal S4/C2 axis' },
+      { id: '2C2p', symbol: '2C2\'', operationType: 'Cn', count: 2, description: 'Two perpendicular 180° rotation axes orthogonal to S4' },
+      { id: '2sigma_d', symbol: '2σd', operationType: 'sigma_d', count: 2, description: 'Two dihedral mirror planes containing the S4 axis and bisecting the 2C2\' axes' },
+    ],
+    irreps: [
+      { symbol: 'A1', id: 'A1', dimension: 1, characters: [1, 1, 1, 1, 1], linearFunctions: [], quadraticFunctions: ['x²+y²', 'z²'], orbitalBasis: 's, dz²', irActive: false, ramanActive: true, description: 'Totally symmetric representation invariant under S4, C2, and σd.' },
+      { symbol: 'A2', id: 'A2', dimension: 1, characters: [1, 1, 1, -1, -1], linearFunctions: ['Rz'], quadraticFunctions: [], orbitalBasis: '', irActive: false, ramanActive: false, description: 'Symmetric under S4 and C2(z), antisymmetric under C2\' and σd.' },
+      { symbol: 'B1', id: 'B1', dimension: 1, characters: [1, -1, 1, 1, -1], linearFunctions: [], quadraticFunctions: ['x²-y²'], orbitalBasis: 'dx²-y²', irActive: false, ramanActive: true, description: 'Antisymmetric under S4 and σd, symmetric under C2(z) and C2\'.' },
+      { symbol: 'B2', id: 'B2', dimension: 1, characters: [1, -1, 1, -1, 1], linearFunctions: ['z'], quadraticFunctions: ['xy'], orbitalBasis: 'pz, dxy', irActive: true, ramanActive: true, description: 'Dipole-allowed representation along the S4/C2(z) axis and dxy backbonding manifold.' },
+      { symbol: 'E', id: 'E', dimension: 2, characters: [2, 0, -2, 0, 0], linearFunctions: ['(x, y)', '(Rx, Ry)'], quadraticFunctions: ['(xz, yz)'], orbitalBasis: '(px, py), (dxz, dyz)', irActive: true, ramanActive: true, description: 'Doubly degenerate representation spanning the perpendicular (xz, yz) π-backbonding planes.' },
+    ],
+    elements3D: [
+      { id: 's4_x', type: 'axis', label: 'S4 / C2 (Principal Axis)', schoenflies: 'S4', fold: 4, axis: [1, 0, 0], color: '#2563EB', description: 'Improper 4-fold S4 and collinear C2 axis passing through both chelating diene centroids and the metal center' },
+      { id: 'c2_p1', type: 'axis', label: 'C2\' (Bisector 1)', schoenflies: 'C2\'', fold: 2, axis: [0, 0.707, 0.707], color: '#0284C7', description: 'Perpendicular 2-fold axis exchanging the two orthogonal diene ligands' },
+      { id: 'sigma_d1', type: 'plane', label: 'σd(xy)', schoenflies: 'σd', axis: [0, 0, 1], color: '#0D9488', description: 'Dihedral mirror plane containing the S4 axis and bisecting the C=C bonds of one diene' },
+      { id: 'sigma_d2', type: 'plane', label: 'σd(xz)', schoenflies: 'σd', axis: [0, 1, 0], color: '#D97706', description: 'Orthogonal dihedral mirror plane containing the S4 axis and bisecting the second diene' },
+    ],
+    defaultReduciblePresets: [
+      { id: 'diene_pi_4', label: 'Γ_π (4 Olefin π-Donor Orbitals)', characters: [4, 0, 0, 0, 2], description: 'Four η²-alkene π-donor lobes in M(diene)2 decompose into Γ_π = A1 + B2 + E' },
+      { id: 'gamma_d', label: 'Γ_d (5 Metal d Orbitals in D2d)', characters: [5, -1, 1, 1, 1], description: 'Five metal d orbitals split into A1(dz²) + B1(dx²-y²) + B2(dxy) + E(dxz, dyz)' },
+    ],
+  },
+
   D2h: {
     id: 'D2h',
     schoenflies: 'D2h',
@@ -347,6 +380,70 @@ export const POINT_GROUPS: Record<string, PointGroupData> = {
     ],
     defaultReduciblePresets: [
       { id: 'sigma_bonds', label: 'Γ_σ (4 Square Planar σ Bonds)', characters: [4, 0, 0, 2, 0, 0, 0, 4, 2, 0], description: 'Four σ bonds decompose into Γ_σ = A1g + B1g + Eu (dsp² hybridization)' },
+    ],
+  },
+
+  D3: {
+    id: 'D3',
+    schoenflies: 'D3',
+    name: 'Chiral Dihedral / Tris-Chelate Propeller',
+    order: 6,
+    family: 'Dn (Chiral Dihedral)',
+    description: 'Features a principal 3-fold C3 axis and three perpendicular C2\' axes with no mirror planes or inversion center (chiral Λ/Δ propeller). Classic examples: [Co(en)3]³⁺, [Ru(bpy)3]²⁺, Fe(acac)3, [Fe(C2O4)3]³⁻.',
+    classes: [
+      { id: 'E', symbol: 'E', operationType: 'E', count: 1, description: 'Identity operation' },
+      { id: '2C3', symbol: '2C3(z)', operationType: 'Cn', count: 2, description: '±120° rotations around the principal 3-fold propeller axis' },
+      { id: '3C2p', symbol: '3C2\'', operationType: 'Cn', count: 3, description: 'Three 180° rotations bisecting each bidentate chelate ring' },
+    ],
+    irreps: [
+      { symbol: 'A1', id: 'A1', dimension: 1, characters: [1, 1, 1], linearFunctions: [], quadraticFunctions: ['x²+y²', 'z²'], orbitalBasis: 's, dz²', irActive: false, ramanActive: true, description: 'Totally symmetric representation along the C3 propeller axis.' },
+      { symbol: 'A2', id: 'A2', dimension: 1, characters: [1, 1, -1], linearFunctions: ['z', 'Rz'], quadraticFunctions: [], orbitalBasis: 'pz', irActive: true, ramanActive: false, description: 'Symmetric under C3 rotation, antisymmetric under perpendicular C2\' rotations.' },
+      { symbol: 'E', id: 'E', dimension: 2, characters: [2, -1, 0], linearFunctions: ['(x, y)', '(Rx, Ry)'], quadraticFunctions: ['(x²-y², xy)', '(xz, yz)'], orbitalBasis: '(px, py), (dxz, dyz), (dx²-y², dxy)', irActive: true, ramanActive: true, description: 'Doubly degenerate representation spanning the plane perpendicular to C3.' },
+    ],
+    elements3D: [
+      { id: 'c3_diag', type: 'axis', label: 'C3 (Propeller Axis)', schoenflies: 'C3', fold: 3, axis: [0.577, 0.577, 0.577], color: '#2563EB', description: 'Principal 3-fold axis of the tris-chelate propeller' },
+      { id: 'c2_1', type: 'axis', label: 'C2\' (Chelate Axis)', schoenflies: 'C2\'', fold: 2, axis: [0.707, 0.707, 0], color: '#0284C7', description: '2-fold rotation axis bisecting a bidentate chelate ligand' },
+    ],
+    defaultReduciblePresets: [
+      { id: 'sigma_6', label: 'Γ_σ (6 Tris-Chelate M–L σ Bonds)', characters: [6, 0, 0], description: 'Six octahedral chelate σ donor bonds decompose into Γ_σ = A1 + A2 + 2E' },
+      { id: 'gamma_d', label: 'Γ_d (5 Metal d Orbitals in D3)', characters: [5, -1, 1], description: 'Octahedral t2g splits into A1 + E while eg remains E (Γ_d = A1 + 2E)' },
+    ],
+  },
+
+  D5d: {
+    id: 'D5d',
+    schoenflies: 'D5d',
+    name: 'Pentagonal Antiprismatic / Staggered Metallocene',
+    order: 20,
+    family: 'Dnd (Dihedral Antiprismatic)',
+    description: 'Contains a 5-fold principal C5 axis, five perpendicular C2\' axes, an inversion center i, an S10 improper axis, and five dihedral mirror planes σd. Classic examples: Staggered Ferrocene Fe(C5H5)2, Cobaltocene Co(C5H5)2, Ruthenocene Ru(C5H5)2.',
+    classes: [
+      { id: 'E', symbol: 'E', operationType: 'E', count: 1, description: 'Identity operation' },
+      { id: '2C5', symbol: '2C5(z)', operationType: 'Cn', count: 2, description: '±72° rotations around the principal 5-fold sandwich axis' },
+      { id: '2C5_2', symbol: '2C5²(z)', operationType: 'Cn', count: 2, description: '±144° rotations around the principal 5-fold axis' },
+      { id: '5C2p', symbol: '5C2\'', operationType: 'Cn', count: 5, description: 'Five perpendicular 180° axes in the xy plane' },
+      { id: 'i', symbol: 'i', operationType: 'i', count: 1, description: 'Inversion through the central metal atom' },
+      { id: '2S10_3', symbol: '2S10³', operationType: 'Sn', count: 2, description: '±108° improper rotations around the z-axis' },
+      { id: '2S10', symbol: '2S10', operationType: 'Sn', count: 2, description: '±36° improper rotations around the z-axis' },
+      { id: '5sigma_d', symbol: '5σd', operationType: 'sigma_d', count: 5, description: 'Five vertical dihedral mirror planes bisecting opposite C–C bonds' },
+    ],
+    irreps: [
+      { symbol: 'A1g', id: 'A1g', dimension: 1, characters: [1, 1, 1, 1, 1, 1, 1, 1], linearFunctions: [], quadraticFunctions: ['x²+y²', 'z²'], orbitalBasis: 's, dz²', irActive: false, ramanActive: true, description: 'Totally symmetric metal dz² and Cp ring a1g π combination.' },
+      { symbol: 'A2g', id: 'A2g', dimension: 1, characters: [1, 1, 1, -1, 1, 1, 1, -1], linearFunctions: ['Rz'], quadraticFunctions: [], orbitalBasis: '', irActive: false, ramanActive: false, description: 'In-plane ring rotation.' },
+      { symbol: 'E1g', id: 'E1g', dimension: 2, characters: [2, 0.618, -1.618, 0, 2, 0.618, -1.618, 0], linearFunctions: ['(Rx, Ry)'], quadraticFunctions: ['(xz, yz)'], orbitalBasis: '(dxz, dyz) — Strong M–Cp π Bonding', irActive: false, ramanActive: true, description: 'Primary covalent metal–cyclopentadienyl dxz/dyz π-bonding pair.' },
+      { symbol: 'E2g', id: 'E2g', dimension: 2, characters: [2, -1.618, 0.618, 0, 2, -1.618, 0.618, 0], linearFunctions: [], quadraticFunctions: ['(x²-y², xy)'], orbitalBasis: '(dx²-y², dxy) — Weak δ Bonding', irActive: false, ramanActive: true, description: 'In-plane metal dx²-y²/dxy δ-symmetry frontier orbital pair.' },
+      { symbol: 'A2u', id: 'A2u', dimension: 1, characters: [1, 1, 1, -1, -1, -1, -1, 1], linearFunctions: ['z'], quadraticFunctions: [], orbitalBasis: 'pz', irActive: true, ramanActive: false, description: 'Antisymmetric out-of-plane metal pz + Cp ring combination.' },
+      { symbol: 'E1u', id: 'E1u', dimension: 2, characters: [2, 0.618, -1.618, 0, -2, -0.618, 1.618, 0], linearFunctions: ['(x, y)'], quadraticFunctions: [], orbitalBasis: '(px, py)', irActive: true, ramanActive: false, description: 'Ungerade metal px/py + Cp ring e1u combination.' },
+    ],
+    elements3D: [
+      { id: 'c5_z', type: 'axis', label: 'C5 (z-axis)', schoenflies: 'C5', fold: 5, axis: [0, 0, 1], color: '#2563EB', description: 'Principal 5-fold axis passing through both Cp ring centroids and the central metal' },
+      { id: 'c2_p1', type: 'axis', label: 'C2\' (xy plane)', schoenflies: 'C2\'', fold: 2, axis: [1, 0, 0], color: '#0284C7', description: 'Perpendicular 2-fold axis through the central metal' },
+      { id: 'sigma_d1', type: 'plane', label: 'σd (Dihedral)', schoenflies: 'σd', axis: [0, 1, 0], color: '#0D9488', description: 'Dihedral mirror plane containing the C5 axis' },
+      { id: 'inv', type: 'center', label: 'Inversion Center i', schoenflies: 'i', color: '#DC2626', description: 'Inversion center at the metal nucleus' },
+    ],
+    defaultReduciblePresets: [
+      { id: 'cp_pi_10', label: 'Γ_π (10 Cp Carbon 2pz Orbitals)', characters: [10, 0, 0, 0, 0, 0, 0, 2], description: 'Ten Cp π orbitals decompose into A1g + A2u + E1g + E1u + E2g + E2u' },
+      { id: 'gamma_d', label: 'Γ_d (5 Metal d Orbitals in D5d)', characters: [5, 0, 0, 1, 5, 0, 0, 1], description: 'Five metal d orbitals split into A1g(dz²) + E1g(dxz,dyz) + E2g(dx²-y²,dxy)' },
     ],
   },
 

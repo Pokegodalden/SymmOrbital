@@ -142,6 +142,42 @@ const AMBIGUOUS_FORMULA_QUERY_MAP: Record<string, string> = {
   'ptcl4': 'tetrachloroplatinate',
   'hexaamminecobalt(iii)': 'hexaamminecobalt(3+)',
   '[co(nh3)6]3+': 'hexaamminecobalt(3+)',
+  "wilkinson's catalyst": 'chlorotris(triphenylphosphine)rhodium',
+  'wilkinsons catalyst': 'chlorotris(triphenylphosphine)rhodium',
+  'rhcl(pph3)3': 'chlorotris(triphenylphosphine)rhodium',
+  '[rhcl(pph3)3]': 'chlorotris(triphenylphosphine)rhodium',
+  "vaska's complex": 'carbonylchlorobis(triphenylphosphine)iridium',
+  'vaskas complex': 'carbonylchlorobis(triphenylphosphine)iridium',
+  'ircl(co)(pph3)2': 'carbonylchlorobis(triphenylphosphine)iridium',
+  '[ircl(co)(pph3)2]': 'carbonylchlorobis(triphenylphosphine)iridium',
+  'pd(pph3)4': 'tetrakis(triphenylphosphine)palladium',
+  'pt(pph3)4': 'tetrakis(triphenylphosphine)platinum',
+  'pdcl2(pph3)2': 'dichlorobis(triphenylphosphine)palladium',
+  'nicl2(pph3)2': 'dichlorobis(triphenylphosphine)nickel',
+  '[co(en)3]3+': 'tris(ethylenediamine)cobalt(III)',
+  'co(en)3': 'tris(ethylenediamine)cobalt(III)',
+  '[ru(bpy)3]2+': 'tris(bipyridine)ruthenium(II)',
+  'ru(bpy)3': 'tris(bipyridine)ruthenium(II)',
+  'fe(acac)3': 'iron(III) acetylacetonate',
+  'cr(acac)3': 'chromium(III) acetylacetonate',
+  'tris(oxalato)ferrate': 'potassium ferrioxalate',
+  '[fe(c2o4)3]3-': 'potassium ferrioxalate',
+  'ni(dmgh)2': 'nickel dimethylglyoximate',
+  "zeise's salt": "zeise's salt",
+  'zeises salt': "zeise's salt",
+  '[ptcl3(c2h4)]-': "zeise's salt",
+  'ptcl3(c2h4)': "zeise's salt",
+  'c2h4cl3pt': "zeise's salt",
+  'ni(cod)2': 'bis(1,5-cyclooctadiene)nickel',
+  'bis(1,5-cyclooctadiene)nickel': 'bis(1,5-cyclooctadiene)nickel',
+  'bis(1,5-cyclooctadiene)nickel(0)': 'bis(1,5-cyclooctadiene)nickel',
+  'bis(cyclooctadiene)nickel': 'bis(1,5-cyclooctadiene)nickel',
+  'pt(cod)cl2': 'dichloro(1,5-cyclooctadiene)platinum',
+  'pd(cod)cl2': 'dichloro(1,5-cyclooctadiene)palladium',
+  'cr(c6h6)2': 'bis(benzene)chromium',
+  'bis(benzene)chromium': 'bis(benzene)chromium',
+  'bis(benzene)chromium(0)': 'bis(benzene)chromium',
+  '(c6h6)cr(co)3': '(benzene)chromium tricarbonyl',
 };
 
 /**
@@ -273,7 +309,7 @@ export function parseSdfToGraph(
   // as well as polycyclic aromatics and cages up to Coronene (C24H12).
   const rawHeavyCount = resolvedAtoms.filter((a) => a.element !== 'H').length;
   if (rawHeavyCount > 28 || resolvedAtoms.length > 76) {
-    const heavyAtoms = resolvedAtoms.filter((a) => a.element !== 'H').slice(0, 60);
+    const heavyAtoms = resolvedAtoms.filter((a) => a.element !== 'H').slice(0, 120);
     const heavyIds = new Set(heavyAtoms.map((a) => a.id));
     const heteroIds = new Set(
       heavyAtoms.filter((a) => a.element !== 'C').map((a) => a.id)
