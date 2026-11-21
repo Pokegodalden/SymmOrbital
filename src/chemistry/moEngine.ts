@@ -102,6 +102,30 @@ export function getImplicitHydrogenCountForAtom(
     return other?.element === 'C';
   });
   if (isBondedToMetal && hasCCBond) {
+    // Metal-coordinated ηⁿ carbon ring (e.g., η⁵-Cp, η⁵-Cp*, η⁶-arene, η⁴-C4H4):
+    // each delocalized sp² ring carbon has σ-valence 3 toward non-metals (2 ring C bonds + 1 exo H or substituent).
+    // Check if at least 2 carbon neighbors of `atom` are also bonded to the same metal center.
+    const bondedMetalIds = new Set(
+      connected
+        .map((b) => (b.source === atom.id ? b.target : b.source))
+        .filter((id) => {
+          const other = atoms.find((x) => x.id === id);
+          return Boolean(other && (isTransitionMetal(other.element) || isLanthanide(other.element)));
+        })
+    );
+    const sameMetalRingCNeighbors = nonMetalBonds.filter((b) => {
+      const otherId = b.source === atom.id ? b.target : b.source;
+      const other = atoms.find((x) => x.id === otherId);
+      if (!other || other.element !== 'C') return false;
+      return bonds.some(
+        (mb) =>
+          (mb.source === other.id && bondedMetalIds.has(mb.target)) ||
+          (mb.target === other.id && bondedMetalIds.has(mb.source))
+      );
+    }).length;
+    if (sameMetalRingCNeighbors >= 2) {
+      return Math.max(0, 3 - nonMetalBonds.length);
+    }
     const nonMetalBoSum = nonMetalBonds.reduce((sum, b) => sum + b.order, 0);
     const chgPenalty = atom.formalCharge ? Math.abs(atom.formalCharge) : 0;
     return Math.max(0, 4 - nonMetalBoSum - chgPenalty);
@@ -145,12 +169,376 @@ const MAIN_GROUP_COORD_CENTERS = new Set<ElementSymbol>([
   'B', 'Al', 'Ga', 'In', 'Tl', 'Si', 'Ge', 'Sn', 'Pb', 'P', 'As', 'Sb', 'Bi', 'S', 'Se', 'Te', 'Xe',
 ]);
 
+export interface HapticRingGroup {
+  metalId: string;
+  ringCarbonIds: string[];
+  metalCarbonBondIds: Set<string>;
+  ringPerimeterBondIds: Set<string>;
+  hapticity: 4 | 5 | 6;
+}
+
+/**
+ * Finds all closed all-carbon cycles of size 4, 5, or 6 inside a set of atoms and bonds,
+ * returning ordered arrays of atom IDs around each cycle.
+ */
+function findCarbonCycles(
+  atomIds: Set<string>,
+  atomsById: Map<string, AtomNode>,
+  bonds: BondEdge[],
+  allowedSizes: number[] = [5, 6, 4]
+): string[][] {
+  const cAdj = new Map<string, string[]>();
+  for (const id of atomIds) {
+    if (atomsById.get(id)?.element === 'C') {
+      cAdj.set(id, []);
+    }
+  }
+  for (const b of bonds) {
+    if (cAdj.has(b.source) && cAdj.has(b.target)) {
+      cAdj.get(b.source)!.push(b.target);
+      cAdj.get(b.target)!.push(b.source);
+    }
+  }
+
+  const maxLen = Math.max(...allowedSizes);
+  const sizeSet = new Set(allowedSizes);
+  const seenKeys = new Set<string>();
+  const cycles: string[][] = [];
+
+  for (const startId of cAdj.keys()) {
+    const dfs = (curr: string, path: string[]) => {
+      for (const nb of cAdj.get(curr) || []) {
+        if (nb === startId && sizeSet.has(path.length)) {
+          const key = [...path].sort().join('|');
+          if (!seenKeys.has(key)) {
+            seenKeys.add(key);
+            cycles.push([...path]);
+          }
+          continue;
+        }
+        if (path.length < maxLen && !path.includes(nb) && nb > startId) {
+          dfs(nb, [...path, nb]);
+        }
+      }
+    };
+    dfs(startId, [startId]);
+  }
+  return cycles;
+}
+
+/**
+ * Detects every transition-metal or lanthanide η⁴/η⁵/η⁶ haptic coordination to a closed
+ * all-carbon ring (e.g. Ferrocene, Decamethylferrocene, Acetylferrocene, Titanocene dichloride,
+ * Bis(benzene)chromium, Benchrotrene, Cymantrene, (C4H4)Fe(CO)3).
+ * Used identically by the 2D Sketcher, 3D Visualizers (v2 & v3), and topology analyzers.
+ */
+export function detectHapticRingCoordinations(
+  atoms: AtomNode[],
+  bonds: BondEdge[]
+): HapticRingGroup[] {
+  const groups: HapticRingGroup[] = [];
+  if (atoms.length < 5) return groups;
+
+  const atomsById = new Map<string, AtomNode>();
+  for (const a of atoms) atomsById.set(a.id, a);
+
+  const metals = atoms.filter(
+    (a) => isTransitionMetal(a.element) || isLanthanide(a.element)
+  );
+  if (metals.length === 0) return groups;
+
+  for (const metal of metals) {
+    const metalCarbonBonds = bonds.filter((b) => {
+      const otherId = b.source === metal.id ? b.target : b.target === metal.id ? b.source : null;
+      return Boolean(otherId && atomsById.get(otherId)?.element === 'C');
+    });
+    if (metalCarbonBonds.length < 4) continue;
+
+    const cDonorIds = new Set<string>(
+      metalCarbonBonds.map((b) => (b.source === metal.id ? b.target : b.source))
+    );
+    const cycles = findCarbonCycles(cDonorIds, atomsById, bonds, [5, 6, 4]);
+
+    const usedCarbons = new Set<string>();
+    // Prefer 5- and 6-membered rings before 4-membered
+    cycles.sort((a, b) => {
+      const rank = (n: number) => (n === 5 ? 0 : n === 6 ? 1 : 2);
+      return rank(a.length) - rank(b.length);
+    });
+
+    for (const cycle of cycles) {
+      if (cycle.some((id) => usedCarbons.has(id))) continue;
+      const cycleSet = new Set(cycle);
+      const mcBondIds = new Set<string>();
+      for (const b of metalCarbonBonds) {
+        const otherId = b.source === metal.id ? b.target : b.source;
+        if (cycleSet.has(otherId)) mcBondIds.add(b.id);
+      }
+      if (mcBondIds.size !== cycle.length) continue;
+
+      const perimBondIds = new Set<string>();
+      for (let k = 0; k < cycle.length; k++) {
+        const id1 = cycle[k];
+        const id2 = cycle[(k + 1) % cycle.length];
+        const edge = bonds.find(
+          (b) =>
+            (b.source === id1 && b.target === id2) ||
+            (b.source === id2 && b.target === id1)
+        );
+        if (edge) perimBondIds.add(edge.id);
+      }
+      if (perimBondIds.size !== cycle.length) continue;
+
+      cycle.forEach((id) => usedCarbons.add(id));
+      groups.push({
+        metalId: metal.id,
+        ringCarbonIds: cycle,
+        metalCarbonBondIds: mcBondIds,
+        ringPerimeterBondIds: perimBondIds,
+        hapticity: cycle.length as 4 | 5 | 6,
+      });
+    }
+  }
+
+  return groups;
+}
+
+/**
+ * Generates clean, textbook non-overlapping 2D coordinates for organometallic haptic-ring
+ * complexes (parallel metallocene sandwiches, bent metallocenes, and piano-stool half-sandwiches)
+ * so the 2D Sketcher displays symmetric rings, clear metal-centroid coordination, and collision-free
+ * hydrogens and multi-atom substituents (e.g., Cp*, acetyl, carboxyl, methyl, carbonyl).
+ */
+function layoutOrganometallic2D(
+  atoms: AtomNode[],
+  bonds: BondEdge[],
+  topo: ChelateOrSandwichTopology
+): void {
+  const { centerAtom, kind, ligands } = topo;
+  if (
+    kind !== 'metallocene_sandwich' &&
+    kind !== 'bent_metallocene' &&
+    kind !== 'piano_stool_sandwich'
+  ) {
+    return;
+  }
+
+  const atomsById = new Map<string, AtomNode>();
+  const adj = new Map<string, string[]>();
+  for (const a of atoms) {
+    atomsById.set(a.id, a);
+    adj.set(a.id, []);
+  }
+  for (const b of bonds) {
+    if (adj.has(b.source) && adj.has(b.target)) {
+      adj.get(b.source)!.push(b.target);
+      adj.get(b.target)!.push(b.source);
+    }
+  }
+
+  const isFlatZ = atoms.every((a) => Math.abs(a.z3d) < 0.05);
+  const setPos2D = (a: AtomNode, x: number, y: number) => {
+    a.x2d = Number(x.toFixed(2));
+    a.y2d = Number(y.toFixed(2));
+    if (isFlatZ) {
+      a.x3d = a.x2d;
+      a.y3d = Number((-a.y2d).toFixed(2));
+      a.z3d = 0;
+    }
+  };
+
+  // Recursively lay out an exo substituent tree starting at `root` outward along `dirAngle`
+  const placeSubstituentTree2D = (
+    parent: AtomNode,
+    root: AtomNode,
+    dirAngle: number,
+    visited: Set<string>,
+    depth = 0
+  ) => {
+    const stepLen =
+      root.element === 'H'
+        ? depth === 0
+          ? 0.68
+          : 0.56
+        : depth === 0
+          ? 0.88
+          : 0.78;
+    const rx = parent.x2d + stepLen * Math.cos(dirAngle);
+    const ry = parent.y2d + stepLen * Math.sin(dirAngle);
+    setPos2D(root, rx, ry);
+    visited.add(root.id);
+
+    const children = (adj.get(root.id) || [])
+      .filter((id) => id !== centerAtom.id && !visited.has(id))
+      .map((id) => atomsById.get(id))
+      .filter((x): x is AtomNode => Boolean(x))
+      // Sort heavy children first so O/C take crisp trigonal branches and H's fill remaining slots
+      .sort((a, b) => (a.element === 'H' ? 1 : 0) - (b.element === 'H' ? 1 : 0));
+
+    if (children.length === 0) return;
+    const spread = children.length === 1 ? 0 : children.length === 2 ? 1.05 : 1.15;
+    children.forEach((child, idx) => {
+      if (visited.has(child.id)) return;
+      const offset =
+        children.length === 1
+          ? 0
+          : -spread + (idx * 2 * spread) / Math.max(1, children.length - 1);
+      placeSubstituentTree2D(root, child, dirAngle + offset, visited, depth + 1);
+    });
+  };
+
+  // Lay out a cyclic ηⁿ carbon ring centered at (cx, cy) with a flat edge oriented toward metal (mx, my)
+  const placeRing2D = (
+    lig: ChelateLigandInfo,
+    cx: number,
+    cy: number,
+    mx: number,
+    my: number
+  ) => {
+    const donorSet = new Set(lig.donors.map((d) => d.id));
+    const ordered: AtomNode[] = [];
+    if (lig.donors.length > 0) {
+      // Order ring carbons cyclically; if there's a heavy substituent, start there so it faces outward nicely
+      const startCarbon =
+        lig.donors.find((d) =>
+          (adj.get(d.id) || []).some((nb) => {
+            const na = atomsById.get(nb);
+            return na && na.id !== centerAtom.id && !donorSet.has(na.id) && na.element !== 'H';
+          })
+        ) || lig.donors[0];
+      ordered.push(startCarbon);
+      const used = new Set<string>([startCarbon.id]);
+      while (ordered.length < lig.donors.length) {
+        const last = ordered[ordered.length - 1];
+        const nextId = (adj.get(last.id) || []).find(
+          (nb) => donorSet.has(nb) && !used.has(nb)
+        );
+        if (!nextId) {
+          const fb = lig.donors.find((d) => !used.has(d.id));
+          if (!fb) break;
+          ordered.push(fb);
+          used.add(fb.id);
+        } else {
+          ordered.push(atomsById.get(nextId)!);
+          used.add(nextId);
+        }
+      }
+    }
+
+    const n = ordered.length;
+    const rRing = n === 6 ? 1.0 : n === 5 ? 0.92 : 0.82;
+    // Direction from metal to ring center (outward)
+    const outAngle = Math.atan2(cy - my, cx - mx);
+    // For odd n (5-ring), placing vertex 0 at outAngle puts the flat edge directly facing the metal!
+    // For even n (6-ring / 4-ring), placing vertex 0 at outAngle + π/n puts a flat edge facing the metal!
+    const startAngle = n % 2 === 1 ? outAngle : outAngle + Math.PI / n;
+
+    const visited = new Set<string>([centerAtom.id, ...ordered.map((c) => c.id)]);
+    ordered.forEach((cAtom, k) => {
+      const phi = startAngle + (k * 2 * Math.PI) / Math.max(1, n);
+      setPos2D(cAtom, cx + rRing * Math.cos(phi), cy + rRing * Math.sin(phi));
+    });
+
+    // Place exo substituents / hydrogens outward from each ring carbon, gently splaying inner H's away from metal
+    ordered.forEach((cAtom, k) => {
+      const phi = startAngle + (k * 2 * Math.PI) / Math.max(1, n);
+      const subs = (adj.get(cAtom.id) || [])
+        .filter((nb) => !visited.has(nb))
+        .map((nb) => atomsById.get(nb))
+        .filter((x): x is AtomNode => Boolean(x));
+
+      // Angle difference from vector pointing directly toward the metal (outAngle + π)
+      const toMetalAngle = outAngle + Math.PI;
+      let delta = Math.atan2(Math.sin(phi - toMetalAngle), Math.cos(phi - toMetalAngle));
+      let subBaseAngle = phi;
+      if (Math.abs(delta) < 0.85) {
+        // Slightly deflect inner-facing C-H bonds sideways so they never crowd the metal-centroid axis
+        subBaseAngle = phi + (delta >= 0 ? 0.28 : -0.28);
+      }
+
+      subs.forEach((sub, sIdx) => {
+        if (visited.has(sub.id)) return;
+        const spread = subs.length > 1 ? (sIdx - (subs.length - 1) / 2) * 0.5 : 0;
+        placeSubstituentTree2D(cAtom, sub, subBaseAngle + spread, visited, 0);
+      });
+    });
+  };
+
+  if (kind === 'metallocene_sandwich') {
+    const hasHeavySubstituents = ligands.some((l) =>
+      l.allAtoms.some((a) => a.element !== 'H' && !l.donors.some((d) => d.id === a.id))
+    );
+    const yOff = hasHeavySubstituents ? 2.35 : 2.1;
+    setPos2D(centerAtom, 0, 0);
+    placeRing2D(ligands[0], 0, -yOff, 0, 0);
+    placeRing2D(ligands[1], 0, yOff, 0, 0);
+  } else if (kind === 'bent_metallocene') {
+    const ringLigs = ligands.filter((l) => l.donors.length >= 4);
+    const ancLigs = ligands.filter((l) => l.donors.length < 4);
+    setPos2D(centerAtom, 0, 0.2);
+    if (ringLigs.length >= 2) {
+      placeRing2D(ringLigs[0], -1.85, -1.2, 0, 0.2);
+      placeRing2D(ringLigs[1], 1.85, -1.2, 0, 0.2);
+    }
+    const visited = new Set<string>([centerAtom.id]);
+    ancLigs.forEach((lig, idx) => {
+      const d0 = lig.donors[0];
+      const legAngles =
+        ancLigs.length === 1
+          ? [Math.PI / 2]
+          : ancLigs.length === 2
+            ? [Math.PI / 2 + 0.68, Math.PI / 2 - 0.68]
+            : [Math.PI / 2 + 0.85, Math.PI / 2, Math.PI / 2 - 0.85];
+      const ang = legAngles[idx] ?? Math.PI / 2;
+      const rLeg = 1.48;
+      setPos2D(d0, centerAtom.x2d + rLeg * Math.cos(ang), centerAtom.y2d + rLeg * Math.sin(ang));
+      visited.add(d0.id);
+      const children = (adj.get(d0.id) || [])
+        .filter((nb) => nb !== centerAtom.id && !visited.has(nb))
+        .map((nb) => atomsById.get(nb))
+        .filter((x): x is AtomNode => Boolean(x));
+      children.forEach((ch, cIdx) => {
+        const off = children.length > 1 ? (cIdx - (children.length - 1) / 2) * 0.7 : 0;
+        placeSubstituentTree2D(d0, ch, ang + off, visited, 1);
+      });
+    });
+  } else if (kind === 'piano_stool_sandwich') {
+    const capLig = ligands[0];
+    const legLigs = ligands.slice(1);
+    setPos2D(centerAtom, 0, 0.25);
+    placeRing2D(capLig, 0, -1.9, 0, 0.25);
+    const visited = new Set<string>([centerAtom.id]);
+    const legAngles =
+      legLigs.length === 2
+        ? [Math.PI / 2 + 0.66, Math.PI / 2 - 0.66]
+        : legLigs.length === 3
+          ? [Math.PI / 2 + 0.88, Math.PI / 2, Math.PI / 2 - 0.88]
+          : [Math.PI / 2 + 1.05, Math.PI / 2 + 0.35, Math.PI / 2 - 0.35, Math.PI / 2 - 1.05];
+    legLigs.forEach((lig, idx) => {
+      const d0 = lig.donors[0];
+      const ang = legAngles[idx] ?? Math.PI / 2;
+      const rLeg = 1.35;
+      setPos2D(d0, centerAtom.x2d + rLeg * Math.cos(ang), centerAtom.y2d + rLeg * Math.sin(ang));
+      visited.add(d0.id);
+      const children = (adj.get(d0.id) || [])
+        .filter((nb) => nb !== centerAtom.id && !visited.has(nb))
+        .map((nb) => atomsById.get(nb))
+        .filter((x): x is AtomNode => Boolean(x));
+      children.forEach((ch, cIdx) => {
+        const off = children.length > 1 ? (cIdx - (children.length - 1) / 2) * 0.65 : 0;
+        placeSubstituentTree2D(d0, ch, ang + off, visited, 1);
+      });
+    });
+  }
+}
+
 /**
  * Resolves missing coordinate covalent (dative M–L) bonds in coordination complexes
  * where PubChem V2000 SDFs or disconnected SMILES encode monodentate, bidentate/chelating,
- * or η⁵/η² π-ligands (`PPh3`, `PEt3`, `bpy`, `en`, `acac-`, `C2O4(2-)`, `[C-]#N`, `[C-]#[O+]`,
- * `NH3`, `Cl-`, `C5H5-`, `C2H4`, etc.) as separate unconnected fragments around a central metal
- * or hypervalent coordination center, and strips isolated spectator counterions and lattice waters.
+ * or η⁵/η⁶/η⁴/η² π-ligands (`PPh3`, `PEt3`, `bpy`, `en`, `acac-`, `C2O4(2-)`, `[C-]#N`, `[C-]#[O+]`,
+ * `NH3`, `Cl-`, `C5H5-`, `C5Me5-`, substituted Cp, `C6H6`, `C2H4`, etc.) as separate unconnected
+ * fragments around a central metal or hypervalent coordination center, and strips isolated
+ * spectator counterions and lattice waters.
  */
 export function resolveCoordinationBonds(
   rawAtoms: AtomNode[],
@@ -242,11 +630,67 @@ export function resolveCoordinationBonds(
     return outBonds;
   };
 
+  const completeHapticRingHapticity = (
+    atomList: AtomNode[],
+    bondList: BondEdge[]
+  ): BondEdge[] => {
+    const outBonds = [...bondList];
+    const atomsById = new Map<string, AtomNode>();
+    for (const a of atomList) atomsById.set(a.id, a);
+    const areBonded = (id1: string, id2: string) =>
+      outBonds.some(
+        (b) => (b.source === id1 && b.target === id2) || (b.source === id2 && b.target === id1)
+      );
+
+    for (const m of atomList) {
+      if (!isTransitionMetal(m.element) && !isLanthanide(m.element)) continue;
+      const mCarbonIds = new Set(
+        outBonds
+          .filter((b) => b.source === m.id || b.target === m.id)
+          .map((b) => (b.source === m.id ? b.target : b.source))
+          .filter((id) => atomsById.get(id)?.element === 'C')
+      );
+      if (mCarbonIds.size === 0) continue;
+
+      const allIds = new Set(atomList.map((a) => a.id));
+      const cycles = findCarbonCycles(allIds, atomsById, outBonds, [5, 6, 4]);
+      for (const cycle of cycles) {
+        const bondedCount = cycle.filter((id) => mCarbonIds.has(id)).length;
+        if (bondedCount === 0 || bondedCount === cycle.length) continue;
+
+        const cycleSet = new Set(cycle);
+        const endoDoubleCount = outBonds.filter(
+          (b) => b.order === 2 && cycleSet.has(b.source) && cycleSet.has(b.target)
+        ).length;
+        // Complete partial η¹..η⁴ cyclopentadienyl (5-ring with >=2 C=C) or partial η²..η⁵ aromatic benzene (>=2 C bonded)
+        const shouldComplete =
+          (cycle.length === 5 && endoDoubleCount >= 2) ||
+          (cycle.length === 6 && bondedCount >= 2 && endoDoubleCount >= 3) ||
+          (cycle.length === 4 && bondedCount >= 2 && endoDoubleCount >= 2);
+        if (!shouldComplete) continue;
+
+        for (const cid of cycle) {
+          if (!areBonded(m.id, cid)) {
+            outBonds.push({
+              id: `b_haptic_${outBonds.length + 1}`,
+              source: m.id,
+              target: cid,
+              order: 1,
+            });
+            mCarbonIds.add(cid);
+          }
+        }
+      }
+    }
+    return outBonds;
+  };
+
   let atoms = rawAtoms.map((a) => ({ ...a }));
   let bonds = rawBonds.map((b) => ({ ...b }));
   let comps = getComponents(atoms, bonds);
 
   if (comps.length <= 1) {
+    bonds = completeHapticRingHapticity(atoms, bonds);
     return { atoms, bonds: completeEta2AlkeneHapticity(atoms, bonds) };
   }
 
@@ -266,6 +710,7 @@ export function resolveCoordinationBonds(
         bonds = bonds.filter((b) => !spectatorIds.has(b.source) && !spectatorIds.has(b.target));
         comps = getComponents(atoms, bonds);
         if (comps.length <= 1) {
+          bonds = completeHapticRingHapticity(atoms, bonds);
           return { atoms, bonds: completeEta2AlkeneHapticity(atoms, bonds) };
         }
       }
@@ -379,6 +824,48 @@ export function resolveCoordinationBonds(
         .filter((x): x is AtomNode => Boolean(x && x.element !== 'H'));
     const getBoSum = (a: AtomNode) => getConn(a).reduce((s, b) => s + b.order, 0);
 
+    // 0. Cyclopentadienyl η⁵-ring priority check (unsubstituted C5H5 OR substituted Cp* / acetyl-Cp / carboxy-Cp / vinyl-Cp):
+    //    Must run BEFORE O/N/S substituent donor rules so acetylferrocene & ferrocenecarboxylic acid coordinate
+    //    via the 5 Cp ring carbons rather than the peripheral carbonyl/carboxyl oxygen!
+    const compAtomIds = new Set(comp.map((a) => a.id));
+    const compById = new Map<string, AtomNode>();
+    for (const a of comp) compById.set(a.id, a);
+    const isMetalCenter =
+      isTransitionMetal(centerAtom.element) || isLanthanide(centerAtom.element);
+
+    if (isMetalCenter && heavy.length >= 5) {
+      const fiveRings = findCarbonCycles(compAtomIds, compById, bonds, [5]);
+      for (const ringIds of fiveRings) {
+        const ringAtoms = ringIds.map((id) => compById.get(id)!);
+        const ringSet = new Set(ringIds);
+        const endoDoubleCount = bonds.filter(
+          (b) => b.order === 2 && ringSet.has(b.source) && ringSet.has(b.target)
+        ).length;
+        const hasAnionicRingC = ringAtoms.some((a) => (a.formalCharge ?? 0) < 0);
+        const maxExplicitHPerRingC = Math.max(
+          ...ringAtoms.map(
+            (a) =>
+              getConn(a).filter((b) => {
+                const otherId = b.source === a.id ? b.target : b.source;
+                return compById.get(otherId)?.element === 'H';
+              }).length
+          )
+        );
+        // True unsaturated cyclopentadienyl ring: >= 2 endocyclic C=C bonds, OR anionic ring carbon(s),
+        // OR unsaturated C5 ring with <= 1 explicit H per carbon (excludes saturated cyclopentane C5H10 with 2 H/C)
+        const isCpRing =
+          endoDoubleCount >= 2 ||
+          hasAnionicRingC ||
+          (heavy.length === 5 && maxExplicitHPerRingC <= 1);
+        if (isCpRing) {
+          for (const ra of ringAtoms) {
+            ra.formalCharge = 0;
+          }
+          return { donors: ringAtoms, deprotonateHIds: [] };
+        }
+      }
+    }
+
     // 1. Trivalent Group 15 Phosphine / Arsine / Stibine donors (PPh3, PEt3, PMe3, PF3, dppe, BINAP)
     const pDonors = heavy.filter(
       (a) =>
@@ -470,49 +957,49 @@ export function resolveCoordinationBonds(
       return { donors: [sortedOs[0]], deprotonateHIds: [] };
     }
 
-    // 6. Pure Carbon π/σ ligands:
-    //    - η⁵-C5H5 in Ferrocene/Cobaltocene/Ruthenocene
-    //    - η⁶-C6H6 in Bis(benzene)chromium Cr(C6H6)2 or (C6H6)Cr(CO)3
-    //    - η⁴-C4H4 in (C4H4)Fe(CO)3
-    //    - η²,η²-chelating dienes (1,5-cyclooctadiene COD, norbornadiene NBD, 1,3-butadiene)
-    //    - monodentate η²-alkenes of any size (ethylene, propene, 1-hexene, styrene, cyclohexene, norbornene, etc.)
-    if (
-      (heavy.length === 5 || heavy.length === 6 || heavy.length === 4) &&
-      heavy.every((a) => a.element === 'C' && getHeavyNbs(a).length === 2)
-    ) {
-      const ringDoubleBonds = bonds.filter((b) => {
-        if (b.order !== 2) return false;
-        return heavy.some((x) => x.id === b.source) && heavy.some((x) => x.id === b.target);
-      });
-      const allAnionicRing = heavy.every((a) => (a.formalCharge ?? 0) < 0);
-      const explicitHCount = comp.filter((a) => a.element === 'H').length;
-      const isC6H6Ring = heavy.length === 6 && explicitHCount === 6;
-      const isC4H4Ring = heavy.length === 4 && explicitHCount === 4;
-      if (
-        heavy.length === 5 ||
-        (heavy.length === 6 && (ringDoubleBonds.length === 3 || allAnionicRing || isC6H6Ring)) ||
-        (heavy.length === 4 && (ringDoubleBonds.length >= 2 || allAnionicRing || isC4H4Ring))
-      ) {
-        // Normalize PubChem anionic / bond-order-omitted ring representations (e.g. [CH-]1[CH-][CH-][CH-][CH-][CH-]1 in Cr(C6H6)2)
-        if (allAnionicRing || isC6H6Ring || isC4H4Ring) {
-          for (const a of heavy) {
-            a.formalCharge = 0;
-          }
-          if ((heavy.length === 6 || heavy.length === 4) && ringDoubleBonds.length === 0) {
-            const nRing = heavy.length;
-            const ordered: AtomNode[] = [heavy[0]];
-            const used = new Set<string>([heavy[0].id]);
-            while (ordered.length < nRing) {
-              const last = ordered[ordered.length - 1];
-              const next = getHeavyNbs(last).find((nb) => !used.has(nb.id));
-              if (!next) break;
-              ordered.push(next);
-              used.add(next.id);
+    // 6. Pure Carbon / Hydrocarbon π-Ring ligands:
+    //    - η⁶-arene (benzene, toluene, mesitylene, hexamethylbenzene) in Cr(C6H6)2, (C6H6)Cr(CO)3, etc.
+    //    - η⁴-cyclobutadiene in (C4H4)Fe(CO)3
+    //    (η⁵-Cp and substituted Cp* were already matched with higher priority in Step 0 above!)
+    if (isMetalCenter && heavy.length >= 4) {
+      const sixAndFourRings = findCarbonCycles(compAtomIds, compById, bonds, [6, 4]);
+      for (const ringIds of sixAndFourRings) {
+        const ringAtoms = ringIds.map((id) => compById.get(id)!);
+        const ringSet = new Set(ringIds);
+        const ringDoubleBonds = bonds.filter(
+          (b) => b.order === 2 && ringSet.has(b.source) && ringSet.has(b.target)
+        );
+        const allChargedRing = ringAtoms.every((a) => (a.formalCharge ?? 0) !== 0);
+        const explicitHCount = comp.filter((a) => a.element === 'H').length;
+        const isPureC6H6 = ringIds.length === 6 && heavy.length === 6 && explicitHCount === 6;
+        const isPureC4H4 = ringIds.length === 4 && heavy.length === 4 && explicitHCount === 4;
+
+        const hasExocyclicAlkene =
+          ringIds.length === 6 &&
+          bonds.some((b) => {
+            if (b.order !== 2) return false;
+            if (!compAtomIds.has(b.source) || !compAtomIds.has(b.target)) return false;
+            const a1 = compById.get(b.source);
+            const a2 = compById.get(b.target);
+            if (!a1 || !a2 || a1.element !== 'C' || a2.element !== 'C') return false;
+            return !ringSet.has(b.source) || !ringSet.has(b.target);
+          });
+        if (hasExocyclicAlkene) continue;
+
+        if (
+          (ringIds.length === 6 && (ringDoubleBonds.length === 3 || allChargedRing || isPureC6H6)) ||
+          (ringIds.length === 4 && (ringDoubleBonds.length >= 2 || allChargedRing || isPureC4H4))
+        ) {
+          // Normalize PubChem anionic/cationic or bond-order-omitted ring representations
+          // (e.g. [CH-]1[CH-][CH-][CH-][CH-][CH-]1 in Cr(C6H6)2 or [CH+]6 in (C6H6)Cr(CO)3)
+          if (allChargedRing || isPureC6H6 || isPureC4H4) {
+            for (const a of ringAtoms) {
+              a.formalCharge = 0;
             }
-            if (ordered.length === nRing) {
-              for (let k = 0; k < nRing; k += 2) {
-                const a1 = ordered[k];
-                const a2 = ordered[(k + 1) % nRing];
+            if (ringDoubleBonds.length === 0) {
+              for (let k = 0; k < ringAtoms.length; k += 2) {
+                const a1 = ringAtoms[k];
+                const a2 = ringAtoms[(k + 1) % ringAtoms.length];
                 bonds = bonds.map((edge) =>
                   (edge.source === a1.id && edge.target === a2.id) ||
                   (edge.source === a2.id && edge.target === a1.id)
@@ -522,8 +1009,8 @@ export function resolveCoordinationBonds(
               }
             }
           }
+          return { donors: ringAtoms, deprotonateHIds: [] };
         }
-        return { donors: heavy, deprotonateHIds: [] };
       }
     }
 
@@ -549,38 +1036,17 @@ export function resolveCoordinationBonds(
 
       if (ccDoubleBonds.length > 0) {
         // Distinguish non-aromatic olefinic C=C bonds from 6-membered aryl ring C=C bonds (e.g. phenyl ring in styrene)
-        const isBondInAromaticSixRing = (bond: BondEdge): boolean => {
-          const startId = bond.source;
-          const targetId = bond.target;
-          // BFS/DFS for a path of length 5 in heavy atoms from startId to targetId not using `bond`
-          const stack: { curr: string; path: string[] }[] = [{ curr: startId, path: [startId] }];
-          while (stack.length > 0) {
-            const { curr, path } = stack.pop()!;
-            if (path.length === 6) {
-              const currAtom = comp.find((x) => x.id === curr);
-              if (
-                currAtom &&
-                getHeavyNbs(currAtom).some((nb) => nb.id === targetId)
-              ) {
-                const ringSet = new Set(path);
-                const dblInRing = ccDoubleBonds.filter(
-                  (db) => ringSet.has(db.source) && ringSet.has(db.target)
-                ).length;
-                if (dblInRing >= 3) return true;
-              }
-              continue;
-            }
-            const currAtom = comp.find((x) => x.id === curr);
-            if (!currAtom) continue;
-            for (const nb of getHeavyNbs(currAtom)) {
-              if (curr === startId && nb.id === targetId) continue;
-              if (!path.includes(nb.id)) {
-                stack.push({ curr: nb.id, path: [...path, nb.id] });
-              }
-            }
-          }
-          return false;
-        };
+        const aromaticSixRingSets = findCarbonCycles(compAtomIds, compById, bonds, [6])
+          .map((cycle) => new Set(cycle))
+          .filter(
+            (ringSet) =>
+              ccDoubleBonds.filter((db) => ringSet.has(db.source) && ringSet.has(db.target))
+                .length >= 3
+          );
+        const isBondInAromaticSixRing = (bond: BondEdge): boolean =>
+          aromaticSixRingSets.some(
+            (ringSet) => ringSet.has(bond.source) && ringSet.has(bond.target)
+          );
 
         const nonArylDoubleBonds = ccDoubleBonds.filter((b) => !isBondInAromaticSixRing(b));
         const activeDoubleBonds =
@@ -714,6 +1180,10 @@ export function resolveCoordinationBonds(
       allCoordinatedDonors.reduce((s, d) => s + d.y2d, 0) / allCoordinatedDonors.length;
     centerAtom.x2d = Number(avgX2d.toFixed(2));
     centerAtom.y2d = Number(avgY2d.toFixed(2));
+    if (Math.abs(centerAtom.z3d) < 0.05) {
+      centerAtom.x3d = centerAtom.x2d;
+      centerAtom.y3d = Number((-centerAtom.y2d).toFixed(2));
+    }
   }
 
   if (deprotonatedIds.size > 0) {
@@ -723,7 +1193,49 @@ export function resolveCoordinationBonds(
     );
   }
 
+  bonds = completeHapticRingHapticity(atoms, bonds);
   bonds = completeEta2AlkeneHapticity(atoms, bonds);
+
+  // For newly coordinated haptic-ring organometallics (parallel metallocenes, bent metallocenes,
+  // and piano-stool half-sandwiches), generate a clean, collision-free textbook 2D layout
+  // (instead of PubChem's arbitrary disconnected fragment positions).
+  const hapticTopo = analyzeChelateOrSandwichTopology(atoms, bonds);
+  if (
+    hapticTopo &&
+    (hapticTopo.kind === 'metallocene_sandwich' ||
+      hapticTopo.kind === 'bent_metallocene' ||
+      hapticTopo.kind === 'piano_stool_sandwich')
+  ) {
+    // Neutralize redundant ionic formal charges after coordinating anionic Cp rings & halide ligands
+    // (e.g. [Fe+2] in Ferrocene, [Ti+4] + 2[Cl-] in Titanocene dichloride, [Cr+6] artifact in Benchrotrene)
+    if (
+      hapticTopo.kind === 'metallocene_sandwich' &&
+      (centerAtom.formalCharge ?? 0) === 2 &&
+      atoms.filter((a) => a.id !== centerAtom.id && (a.formalCharge ?? 0) < 0).length === 0
+    ) {
+      centerAtom.formalCharge = 0;
+    } else if (
+      hapticTopo.kind === 'bent_metallocene' &&
+      (centerAtom.formalCharge ?? 0) > 0
+    ) {
+      const ancNeg = atoms.filter(
+        (a) => a.id !== centerAtom.id && (a.formalCharge ?? 0) < 0
+      );
+      const ancNegSum = ancNeg.reduce((s, a) => s + (a.formalCharge ?? 0), 0);
+      // 2 neutralized Cp- rings contributed -2; if metalCharge + ancNegSum - 2 === 0, complex is neutral covalent
+      if ((centerAtom.formalCharge ?? 0) + ancNegSum - 2 === 0) {
+        centerAtom.formalCharge = 0;
+        for (const a of ancNeg) a.formalCharge = 0;
+      }
+    } else if (
+      (hapticTopo.kind === 'piano_stool_sandwich' || hapticTopo.kind === 'metallocene_sandwich') &&
+      (centerAtom.formalCharge ?? 0) === 6 &&
+      hapticTopo.ligands.some((l) => l.donors.length === 6 && l.donors.every((d) => d.element === 'C'))
+    ) {
+      centerAtom.formalCharge = 0;
+    }
+    layoutOrganometallic2D(atoms, bonds, hapticTopo);
+  }
 
   return { atoms, bonds };
 }
@@ -792,6 +1304,7 @@ export interface ChelateLigandInfo {
 export interface ChelateOrSandwichTopology {
   kind:
     | 'metallocene_sandwich'
+    | 'bent_metallocene'
     | 'bis_diene_chelate'
     | 'mono_diene_chelate'
     | 'piano_stool_sandwich'
@@ -872,20 +1385,59 @@ export function analyzeChelateOrSandwichTopology(
     });
   }
 
-  // 1. Check for Metallocene / Bis-Arene Sandwich M(η⁵-C5H5)2 or M(η⁶-C6H6)2
+  // Helper: checks if a ligand's metal donors form a closed all-carbon ηⁿ ring (n = 4, 5, or 6),
+  // supporting BOTH unsubstituted (Cp, C6H6, C4H4) AND substituted rings (Cp*, acetyl-Cp, mesitylene, etc.)
+  const isClosedCarbonRingCap = (lig: ChelateLigandInfo, allowedSizes: number[] = [5, 6]): boolean => {
+    const n = lig.donors.length;
+    if (!allowedSizes.includes(n)) return false;
+    if (!lig.donors.every((d) => d.element === 'C')) return false;
+    const donorSet = new Set(lig.donors.map((d) => d.id));
+    return lig.donors.every(
+      (d) => (adj.get(d.id) || []).filter((nb) => donorSet.has(nb)).length === 2
+    );
+  };
+
+  // Helper: checks if every ring carbon carries an identical substituent pattern (e.g., C5H5, C5Me5, C6H6, C6Me6)
+  const isUniformlySubstitutedCap = (lig: ChelateLigandInfo): boolean => {
+    const donorSet = new Set(lig.donors.map((d) => d.id));
+    const subSigs = lig.donors.map((d) => {
+      const subNodes: string[] = [];
+      const vis = new Set<string>([centerAtom.id, ...donorSet]);
+      const q = (adj.get(d.id) || []).filter((nb) => !vis.has(nb));
+      for (const id of q) vis.add(id);
+      while (q.length > 0) {
+        const cur = q.shift()!;
+        const atom = lig.allAtoms.find((x) => x.id === cur);
+        if (atom) subNodes.push(atom.element);
+        for (const nb of adj.get(cur) || []) {
+          if (!vis.has(nb)) {
+            vis.add(nb);
+            q.push(nb);
+          }
+        }
+      }
+      return subNodes.sort().join('');
+    });
+    return new Set(subSigs).size === 1;
+  };
+
+  // 1. Parallel Metallocene / Bis-Arene Sandwich M(η⁵-CpR_k)2 or M(η⁶-Arene)2
+  //    (e.g. Ferrocene, Cobaltocene, Nickelocene, Ruthenocene, Osmocene, Decamethylferrocene,
+  //     Acetylferrocene, Ferrocenecarboxylic acid, Bis(benzene)chromium)
   if (ligands.length === 2) {
-    const isSandwichCap = (lig: ChelateLigandInfo) => {
-      const heavy = lig.allAtoms.filter((x) => x.element !== 'H');
-      return (
-        (heavy.length === 5 || heavy.length === 6) &&
-        heavy.every((x) => x.element === 'C') &&
-        lig.donors.length >= 5
-      );
-    };
-    if (isSandwichCap(ligands[0]) && isSandwichCap(ligands[1])) {
-      const n0 = ligands[0].allAtoms.filter((x) => x.element !== 'H').length;
-      const n1 = ligands[1].allAtoms.filter((x) => x.element !== 'H').length;
-      const pgId = n0 === 6 && n1 === 6 ? 'D6h' : n0 === 5 && n1 === 5 ? 'D5d' : 'Cs';
+    if (isClosedCarbonRingCap(ligands[0], [5, 6]) && isClosedCarbonRingCap(ligands[1], [5, 6])) {
+      const n0 = ligands[0].donors.length;
+      const n1 = ligands[1].donors.length;
+      const bothIdenticalAndUniform =
+        ligands[0].sig === ligands[1].sig &&
+        isUniformlySubstitutedCap(ligands[0]) &&
+        isUniformlySubstitutedCap(ligands[1]);
+      const pgId =
+        n0 === 6 && n1 === 6 && bothIdenticalAndUniform
+          ? 'D6h'
+          : n0 === 5 && n1 === 5 && bothIdenticalAndUniform
+            ? 'D5d'
+            : 'Cs';
       return {
         kind: 'metallocene_sandwich',
         centerAtom,
@@ -893,6 +1445,32 @@ export function analyzeChelateOrSandwichTopology(
         pointGroupId: pgId,
       };
     }
+  }
+
+  // 1b. Bent Metallocene M(η⁵-Cp)2X2 / M(η⁵-Cp)2L2 / M(η⁵-Cp)2X (e.g. Titanocene dichloride Cp2TiCl2,
+  //     Zirconocene dichloride Cp2ZrCl2, Hafnocene dichloride, Cp2MoH2, Cp2Ti(CH3)2, Cp*2TiCl2 -> C2v / Cs)
+  const ringCaps = ligands.filter((l) => isClosedCarbonRingCap(l, [5, 6]));
+  const nonRingLigs = ligands.filter((l) => !isClosedCarbonRingCap(l, [5, 6]));
+  if (
+    ringCaps.length === 2 &&
+    nonRingLigs.length >= 1 &&
+    nonRingLigs.length <= 3 &&
+    nonRingLigs.every((l) => l.donors.length <= 2)
+  ) {
+    const sortedLigands = [...ringCaps, ...nonRingLigs];
+    const ringsIdentical =
+      ringCaps[0].sig === ringCaps[1].sig &&
+      isUniformlySubstitutedCap(ringCaps[0]) &&
+      isUniformlySubstitutedCap(ringCaps[1]);
+    const ancIdentical =
+      nonRingLigs.length === 1 ||
+      (nonRingLigs.length === 2 && nonRingLigs[0].sig === nonRingLigs[1].sig);
+    return {
+      kind: 'bent_metallocene',
+      centerAtom,
+      ligands: sortedLigands,
+      pointGroupId: ringsIdentical && ancIdentical ? 'C2v' : 'Cs',
+    };
   }
 
   // 2. Check for Chelating η²,η²-Diene Complexes (e.g. Ni(COD)2 -> D2d, Pt(COD)Cl2 / Pd(COD)Cl2 / Pt(nbd)Cl2 -> C2v)
@@ -923,19 +1501,28 @@ export function analyzeChelateOrSandwichTopology(
     };
   }
 
-  // 3. Check for Piano-Stool / Half-Sandwich Complex M(ηⁿ-ring/diene)L3 (e.g. (C6H6)Cr(CO)3, (C4H4)Fe(CO)3, (C4H6)Fe(CO)3)
+  // 3. Check for Piano-Stool / Half-Sandwich Complex M(ηⁿ-ring/diene)L_k (k = 2, 3, or 4)
+  //    (e.g. (C6H6)Cr(CO)3 -> C3v, CpMn(CO)3 -> Cs, CpCo(CO)2 -> Cs, CpFe(CO)2Cl -> Cs, (C4H4)Fe(CO)3 -> Cs)
+  const capCandidates = ligands.filter(
+    (l) => l.donors.length >= 4 && l.donors.every((d) => d.element === 'C')
+  );
+  const monoLegCandidates = ligands.filter((l) => l.donors.length === 1);
   if (
-    ligands.length === 4 &&
-    ligands.filter((l) => l.donors.length >= 4 && l.donors.every((d) => d.element === 'C'))
-      .length === 1 &&
-    ligands.filter((l) => l.donors.length === 1).length === 3
+    capCandidates.length === 1 &&
+    monoLegCandidates.length === ligands.length - 1 &&
+    monoLegCandidates.length >= 2 &&
+    monoLegCandidates.length <= 4
   ) {
-    const sortedLigands = [...ligands].sort((a, b) => b.donors.length - a.donors.length);
-    const capHeavy = sortedLigands[0].allAtoms.filter((x) => x.element !== 'H');
-    const legsIdentical =
-      sortedLigands[1].sig === sortedLigands[2].sig &&
-      sortedLigands[2].sig === sortedLigands[3].sig;
-    const pgId = capHeavy.length === 6 && legsIdentical ? 'C3v' : 'Cs';
+    const sortedLigands = [capCandidates[0], ...monoLegCandidates];
+    const capDonorsLen = sortedLigands[0].donors.length;
+    const allLegsIdentical = monoLegCandidates.every((l) => l.sig === monoLegCandidates[0].sig);
+    const capUniform = isClosedCarbonRingCap(sortedLigands[0], [4, 5, 6])
+      ? isUniformlySubstitutedCap(sortedLigands[0])
+      : false;
+    const pgId =
+      monoLegCandidates.length === 3 && capDonorsLen === 6 && capUniform && allLegsIdentical
+        ? 'C3v'
+        : 'Cs';
     return {
       kind: 'piano_stool_sandwich',
       centerAtom,
@@ -1512,11 +2099,13 @@ export function parseChemicalInputToGraph(
 
   const ringClosures = new Map<string, { atomId: string; order: 1 | 2 | 3 }>();
   const ringPlacedAtomIds = new Set<string>();
+  const aromaticAtomIds = new Set<string>();
   const branchStack: string[] = [];
   let currentAtomId: string | null = null;
   let pendingOrder: 1 | 2 | 3 = 1;
   let pendingStereo: BondEdge['stereo'] = 'none';
   let stepIdx = 0;
+  let aromaticEdgeIdx = 0;
 
   let i = 0;
   while (i < text.length) {
@@ -1724,9 +2313,20 @@ export function parseChemicalInputToGraph(
         ...(formalCharge !== 0 ? { formalCharge } : {}),
       });
 
+      if (isAromatic) {
+        aromaticAtomIds.add(id);
+      }
+
       if (currentAtomId) {
+        const bothAromatic = isAromatic && aromaticAtomIds.has(currentAtomId);
         const order: 1 | 2 | 3 =
-          pendingOrder !== 1 ? pendingOrder : isAromatic && stepIdx % 2 === 1 ? 2 : 1;
+          pendingOrder !== 1
+            ? pendingOrder
+            : bothAromatic
+              ? aromaticEdgeIdx++ % 2 === 0
+                ? 2
+                : 1
+              : 1;
         bonds.push({
           id: `b_smi_${bonds.length + 1}`,
           source: currentAtomId,
@@ -2510,82 +3110,277 @@ export function reconstruct3DGeometryFromVSEPR(
       placeComponentHydrogens3D(comp, bOut);
     };
 
-    if (kind === 'metallocene_sandwich') {
-      // Find the two C5 / C6 ring components when centerAtom is removed
-      const visited = new Set<string>([centerAtom.id]);
-      const ringComps: AtomNode[][] = [];
-      for (const a of atoms) {
-        if (visited.has(a.id)) continue;
-        const comp: AtomNode[] = [];
-        const q = [a.id];
-        visited.add(a.id);
-        while (q.length > 0) {
-          const curr = q.shift()!;
-          const node = atoms.find((x) => x.id === curr);
-          if (node) comp.push(node);
-          for (const nb of adj.get(curr) || []) {
-            if (!visited.has(nb)) {
-              visited.add(nb);
-              q.push(nb);
-            }
+    // Reusable 3D builder for an ηⁿ carbon ring cap (Cp, Cp*, substituted Cp, arene, C4H4)
+    // placed at `centroidPos` in the plane orthogonal to `ringNormal` (which points away from metal),
+    // with full recursive 3D placement of multi-atom substituents (-H, -CH3, -COCH3, -COOH, -Ph, etc.).
+    const placeHapticRingCap3D = (
+      lig: ChelateLigandInfo,
+      centroidPos: [number, number, number],
+      ringNormal: [number, number, number],
+      refAxisU: [number, number, number],
+      phiOffset: number,
+      cantSubAway = 0.08
+    ) => {
+      const nLen = Math.hypot(ringNormal[0], ringNormal[1], ringNormal[2]) || 1;
+      const eN: [number, number, number] = [
+        ringNormal[0] / nLen,
+        ringNormal[1] / nLen,
+        ringNormal[2] / nLen,
+      ];
+      // Gram-Schmidt orthogonalize refAxisU against eN -> eU, then eV = eN x eU
+      const dotUN = refAxisU[0] * eN[0] + refAxisU[1] * eN[1] + refAxisU[2] * eN[2];
+      let ux = refAxisU[0] - dotUN * eN[0];
+      let uy = refAxisU[1] - dotUN * eN[1];
+      let uz = refAxisU[2] - dotUN * eN[2];
+      const uLen = Math.hypot(ux, uy, uz) || 1;
+      const eU: [number, number, number] = [ux / uLen, uy / uLen, uz / uLen];
+      const eV: [number, number, number] = [
+        eN[1] * eU[2] - eN[2] * eU[1],
+        eN[2] * eU[0] - eN[0] * eU[2],
+        eN[0] * eU[1] - eN[1] * eU[0],
+      ];
+
+      // Order ring carbons cyclically around the ring
+      const donorSet = new Set(lig.donors.map((d) => d.id));
+      const orderedRing: AtomNode[] = [];
+      if (lig.donors.length > 0) {
+        orderedRing.push(lig.donors[0]);
+        const used = new Set<string>([lig.donors[0].id]);
+        while (orderedRing.length < lig.donors.length) {
+          const last = orderedRing[orderedRing.length - 1];
+          const nextId = (adj.get(last.id) || []).find(
+            (nb) => donorSet.has(nb) && !used.has(nb)
+          );
+          if (!nextId) {
+            const fallback = lig.donors.find((c) => !used.has(c.id));
+            if (!fallback) break;
+            orderedRing.push(fallback);
+            used.add(fallback.id);
+          } else {
+            const nextNode = lig.donors.find((c) => c.id === nextId)!;
+            orderedRing.push(nextNode);
+            used.add(nextNode.id);
           }
         }
-        ringComps.push(comp);
       }
 
-      ringComps.slice(0, 2).forEach((comp, ringIdx) => {
-        const ringCarbons = comp.filter(
-          (a) => a.element === 'C' && (adj.get(a.id) || []).includes(centerAtom.id)
-        );
-        const orderedRing: AtomNode[] = [];
-        if (ringCarbons.length > 0) {
-          const ringSet = new Set(ringCarbons.map((c) => c.id));
-          orderedRing.push(ringCarbons[0]);
-          const used = new Set<string>([ringCarbons[0].id]);
-          while (orderedRing.length < ringCarbons.length) {
-            const last = orderedRing[orderedRing.length - 1];
-            const nextId = (adj.get(last.id) || []).find(
-              (nb) => ringSet.has(nb) && !used.has(nb)
-            );
-            if (!nextId) {
-              const fallback = ringCarbons.find((c) => !used.has(c.id));
-              if (!fallback) break;
-              orderedRing.push(fallback);
-              used.add(fallback.id);
-            } else {
-              const nextNode = ringCarbons.find((c) => c.id === nextId)!;
-              orderedRing.push(nextNode);
-              used.add(nextNode.id);
-            }
-          }
+      const nRing = orderedRing.length;
+      const rCarbon = nRing === 6 ? 1.40 : nRing === 5 ? 1.21 : 1.04;
+      const placed = new Set<string>([centerAtom.id, ...orderedRing.map((c) => c.id)]);
+
+      const placeSubtree3D = (
+        parentAtom: AtomNode,
+        node: AtomNode,
+        outDir: [number, number, number],
+        upDir: [number, number, number],
+        depth: number
+      ) => {
+        const pPos = coords3D.get(parentAtom.id)!;
+        const rBond =
+          node.element === 'H'
+            ? (ELEMENT_PROPERTIES[parentAtom.element]?.covalentRadius ?? 0.77) + 0.32
+            : (ELEMENT_PROPERTIES[parentAtom.element]?.covalentRadius ?? 0.77) +
+              (ELEMENT_PROPERTIES[node.element]?.covalentRadius ?? 0.73) -
+              0.08;
+        const oLen = Math.hypot(outDir[0], outDir[1], outDir[2]) || 1;
+        const ox = outDir[0] / oLen;
+        const oy = outDir[1] / oLen;
+        const oz = outDir[2] / oLen;
+        const pos: [number, number, number] = [
+          Number((pPos[0] + rBond * ox).toFixed(3)),
+          Number((pPos[1] + rBond * oy).toFixed(3)),
+          Number((pPos[2] + rBond * oz).toFixed(3)),
+        ];
+        coords3D.set(node.id, pos);
+        placed.add(node.id);
+
+        const children = (adj.get(node.id) || [])
+          .filter((nb) => !placed.has(nb))
+          .map((nb) => lig.allAtoms.find((x) => x.id === nb))
+          .filter((x): x is AtomNode => Boolean(x))
+          .sort((a, b) => (a.element === 'H' ? 1 : 0) - (b.element === 'H' ? 1 : 0));
+
+        if (children.length === 0) return;
+
+        // Build local orthonormal basis (oVec, t1, t2)
+        const dUp = upDir[0] * ox + upDir[1] * oy + upDir[2] * oz;
+        let t1x = upDir[0] - dUp * ox;
+        let t1y = upDir[1] - dUp * oy;
+        let t1z = upDir[2] - dUp * oz;
+        let t1Len = Math.hypot(t1x, t1y, t1z);
+        if (t1Len < 0.05) {
+          const alt: [number, number, number] = Math.abs(ox) < 0.8 ? [1, 0, 0] : [0, 1, 0];
+          const da = alt[0] * ox + alt[1] * oy + alt[2] * oz;
+          t1x = alt[0] - da * ox;
+          t1y = alt[1] - da * oy;
+          t1z = alt[2] - da * oz;
+          t1Len = Math.hypot(t1x, t1y, t1z) || 1;
         }
+        t1x /= t1Len;
+        t1y /= t1Len;
+        t1z /= t1Len;
+        const t2x = oy * t1z - oz * t1y;
+        const t2y = oz * t1x - ox * t1z;
+        const t2z = ox * t1y - oy * t1x;
 
-        const isSixRing = orderedRing.length === 6;
-        const zRing = ringIdx === 0 ? (isSixRing ? 1.61 : 1.66) : isSixRing ? -1.61 : -1.66;
-        const rCarbon = isSixRing ? 1.40 : 1.21;
-        // Eclipsed D6h for Bis(benzene)chromium Cr(C6H6)2; staggered D5d for Ferrocene Fe(C5H5)2
-        const phiOffset = ringIdx === 0 || isSixRing ? 0 : Math.PI / 5;
+        const m = children.length;
+        // 3 children -> tetrahedral cone (109.5°, cos = 1/3, sin = 2√2/3); 2 children -> trigonal planar (120°, cos = 0.5, sin = √3/2); 1 child -> bent/linear
+        const cosA = m >= 3 ? 0.333 : m === 2 ? 0.5 : 0.72;
+        const sinA = Math.sqrt(Math.max(0, 1 - cosA * cosA));
+        children.forEach((child, cIdx) => {
+          if (placed.has(child.id)) return;
+          const psi =
+            m === 3
+              ? (cIdx * 2 * Math.PI) / 3 // 1st H points along +upDir (away from metal) for exact D5d in Cp*!
+              : m === 2
+                ? Math.PI / 2 + cIdx * Math.PI // lies in ring plane (tangential) for -C(=O)R / -COOH
+                : 0;
+          const dir: [number, number, number] = [
+            cosA * ox + sinA * (Math.cos(psi) * t1x + Math.sin(psi) * t2x),
+            cosA * oy + sinA * (Math.cos(psi) * t1y + Math.sin(psi) * t2y),
+            cosA * oz + sinA * (Math.cos(psi) * t1z + Math.sin(psi) * t2z),
+          ];
+          placeSubtree3D(node, child, dir, [t1x, t1y, t1z], depth + 1);
+        });
+      };
 
-        orderedRing.forEach((cAtom, k) => {
-          const phi = phiOffset + (k * 2 * Math.PI) / Math.max(1, orderedRing.length);
-          const cx = Number((rCarbon * Math.cos(phi)).toFixed(3));
-          const cy = Number((rCarbon * Math.sin(phi)).toFixed(3));
-          coords3D.set(cAtom.id, [cx, cy, zRing]);
+      orderedRing.forEach((cAtom, k) => {
+        const phi = phiOffset + (k * 2 * Math.PI) / Math.max(1, nRing);
+        const radDir: [number, number, number] = [
+          Math.cos(phi) * eU[0] + Math.sin(phi) * eV[0],
+          Math.cos(phi) * eU[1] + Math.sin(phi) * eV[1],
+          Math.cos(phi) * eU[2] + Math.sin(phi) * eV[2],
+        ];
+        coords3D.set(cAtom.id, [
+          Number((centroidPos[0] + rCarbon * radDir[0]).toFixed(3)),
+          Number((centroidPos[1] + rCarbon * radDir[1]).toFixed(3)),
+          Number((centroidPos[2] + rCarbon * radDir[2]).toFixed(3)),
+        ]);
 
-          // Place any attached H or substituent radially outward from the ring
-          const subs = (adj.get(cAtom.id) || [])
-            .filter((nb) => nb !== centerAtom.id && !orderedRing.some((rc) => rc.id === nb))
-            .map((nb) => atoms.find((x) => x.id === nb))
-            .filter((x): x is AtomNode => Boolean(x));
-          subs.forEach((sub, sIdx) => {
-            const rSub = rCarbon + (sub.element === 'H' ? 1.08 : 1.5);
-            const subPhi = phi + (sIdx - (subs.length - 1) / 2) * 0.15;
-            coords3D.set(sub.id, [
-              Number((rSub * Math.cos(subPhi)).toFixed(3)),
-              Number((rSub * Math.sin(subPhi)).toFixed(3)),
-              zRing,
-            ]);
-          });
+        const subs = (adj.get(cAtom.id) || [])
+          .filter((nb) => !placed.has(nb))
+          .map((nb) => lig.allAtoms.find((x) => x.id === nb))
+          .filter((x): x is AtomNode => Boolean(x));
+
+        subs.forEach((sub) => {
+          if (placed.has(sub.id)) return;
+          // Gently cant bulky substituents slightly away from metal along eN (0 for H in parallel sandwich so D5d/D6h stay exact)
+          const cant = sub.element === 'H' ? cantSubAway : Math.max(cantSubAway, 0.08);
+          const outDir: [number, number, number] = [
+            radDir[0] + cant * eN[0],
+            radDir[1] + cant * eN[1],
+            radDir[2] + cant * eN[2],
+          ];
+          placeSubtree3D(cAtom, sub, outDir, eN, 0);
+        });
+      });
+    };
+
+    const getMetalCentroidDist = (el: ElementSymbol, nRing: number, isBent = false): number => {
+      if (isBent) {
+        if (el === 'Zr' || el === 'Hf' || el === 'Nb' || el === 'Ta') return 2.20;
+        return 2.06; // Ti, V, Mo, W
+      }
+      if (nRing === 6) return 1.61; // Cr(C6H6)2
+      if (el === 'Ru' || el === 'Os' || el === 'Mo' || el === 'W' || el === 'Zr' || el === 'Hf') {
+        return 1.82;
+      }
+      return 1.66; // 3d metallocenes: Fe, Co, Ni, Cr, Mn, V
+    };
+
+    if (kind === 'metallocene_sandwich') {
+      const n0 = chelateTopo.ligands[0].donors.length;
+      const n1 = chelateTopo.ligands[1].donors.length;
+      const isSixRing = n0 === 6 && n1 === 6;
+      const z0 = getMetalCentroidDist(centerAtom.element, n0, false);
+      const z1 = getMetalCentroidDist(centerAtom.element, n1, false);
+      // Top ring on +z (eN = +z); Bottom ring on -z (eN = -z, refAxisU = +x -> phiOffset staggered by π/5 for D5d, eclipsed 0 for D6h)
+      placeHapticRingCap3D(chelateTopo.ligands[0], [0, 0, z0], [0, 0, 1], [1, 0, 0], 0, 0);
+      placeHapticRingCap3D(
+        chelateTopo.ligands[1],
+        [0, 0, -z1],
+        [0, 0, -1],
+        [1, 0, 0],
+        isSixRing ? 0 : Math.PI / 5,
+        0
+      );
+    } else if (kind === 'bent_metallocene') {
+      // Bent Metallocene M(η⁵-Cp)2X2 (e.g. Titanocene dichloride Cp2TiCl2, Zirconocene dichloride Cp2ZrCl2 -> exact C2v!):
+      // Two Cp ring centroids in XZ plane at ±65.5° from +z (centroid-M-centroid = 131°);
+      // Two ancillary ligands (Cl, H, CH3, CO) in YZ plane at ±47.5° from -z (X-M-X = 95°).
+      const ringLigs = chelateTopo.ligands.filter((l) => l.donors.length >= 4);
+      const ancLigs = chelateTopo.ligands.filter((l) => l.donors.length < 4);
+
+      const halfTilt = (65.5 * Math.PI) / 180;
+      const sinT = Math.sin(halfTilt);
+      const cosT = Math.cos(halfTilt);
+      const dRing = getMetalCentroidDist(
+        centerAtom.element,
+        ringLigs[0]?.donors.length ?? 5,
+        true
+      );
+
+      if (ringLigs[0]) {
+        const n0: [number, number, number] = [sinT, 0, cosT];
+        // u0 lies in the XZ mirror plane pointing toward +z/-x so vertex 0 sits in XZ plane -> exact C2v!
+        const u0: [number, number, number] = [-cosT, 0, sinT];
+        placeHapticRingCap3D(
+          ringLigs[0],
+          [Number((dRing * n0[0]).toFixed(3)), 0, Number((dRing * n0[2]).toFixed(3))],
+          n0,
+          u0,
+          0,
+          0.06
+        );
+      }
+      if (ringLigs[1]) {
+        const n1: [number, number, number] = [-sinT, 0, cosT];
+        const u1: [number, number, number] = [cosT, 0, sinT];
+        placeHapticRingCap3D(
+          ringLigs[1],
+          [Number((dRing * n1[0]).toFixed(3)), 0, Number((dRing * n1[2]).toFixed(3))],
+          n1,
+          u1,
+          0,
+          0.06
+        );
+      }
+
+      const rCenter = ELEMENT_PROPERTIES[centerAtom.element]?.covalentRadius ?? 1.45;
+      const halfX = (47.5 * Math.PI) / 180;
+      const ancDirs: [number, number, number][] =
+        ancLigs.length === 1
+          ? [[0, 0, -1]]
+          : ancLigs.length === 2
+            ? [
+                [0, Math.sin(halfX), -Math.cos(halfX)],
+                [0, -Math.sin(halfX), -Math.cos(halfX)],
+              ]
+            : [
+                [0, Math.sin(1.05), -Math.cos(1.05)],
+                [0, 0, -1],
+                [0, -Math.sin(1.05), -Math.cos(1.05)],
+              ];
+
+      ancLigs.forEach((leg, idx) => {
+        const d0 = leg.donors[0];
+        const rBond = (rCenter + (ELEMENT_PROPERTIES[d0.element]?.covalentRadius ?? 0.99)) * 0.96;
+        const uDir = ancDirs[idx] || [0, 0, -1];
+        const dPos: [number, number, number] = [
+          Number((rBond * uDir[0]).toFixed(3)),
+          Number((rBond * uDir[1]).toFixed(3)),
+          Number((rBond * uDir[2]).toFixed(3)),
+        ];
+        coords3D.set(d0.id, dPos);
+        const others = leg.allAtoms.filter((a) => a.id !== d0.id);
+        others.forEach((other, oIdx) => {
+          const rDist = other.element === 'H' ? 1.07 : 1.15;
+          const spread = others.length > 1 ? (oIdx - (others.length - 1) / 2) * 0.65 : 0;
+          coords3D.set(other.id, [
+            Number((dPos[0] + rDist * uDir[0] + spread * 0.45).toFixed(3)),
+            Number((dPos[1] + rDist * uDir[1]).toFixed(3)),
+            Number((dPos[2] + rDist * uDir[2]).toFixed(3)),
+          ]);
         });
       });
     } else if (kind === 'bis_diene_chelate') {
@@ -2632,61 +3427,37 @@ export function reconstruct3DGeometryFromVSEPR(
         });
       });
     } else if (kind === 'piano_stool_sandwich') {
-      // Half-sandwich / Piano-stool M(ηⁿ-ring/diene)L3 (e.g. (C6H6)Cr(CO)3, (C4H4)Fe(CO)3, (C4H6)Fe(CO)3)
+      // Half-sandwich / Piano-stool M(ηⁿ-ring/diene)L_k (k = 2, 3, or 4)
+      // (e.g. (C6H6)Cr(CO)3 -> C3v, CpMn(CO)3 -> Cs, CpCo(CO)2 -> Cs, CpFe(CO)2Cl -> Cs, (C4H4)Fe(CO)3 -> Cs)
       const capLig = chelateTopo.ligands[0];
-      const capHeavy = capLig.allAtoms.filter((a) => a.element !== 'H');
       const capDonors = capLig.donors;
-      const isCyclicCap = capHeavy.every(
-        (a) =>
-          (adj.get(a.id) || []).filter((nb) => capHeavy.some((h) => h.id === nb)).length === 2
-      );
+      const capDonorSet = new Set(capDonors.map((d) => d.id));
+      const isCyclicCap =
+        capDonors.length >= 4 &&
+        capDonors.every(
+          (a) => (adj.get(a.id) || []).filter((nb) => capDonorSet.has(nb)).length === 2
+        );
       if (isCyclicCap) {
-        const orderedRing: AtomNode[] = [capDonors[0]];
-        const used = new Set<string>([capDonors[0].id]);
-        const ringSet = new Set(capDonors.map((c) => c.id));
-        while (orderedRing.length < capDonors.length) {
-          const last = orderedRing[orderedRing.length - 1];
-          const nextId = (adj.get(last.id) || []).find(
-            (nb) => ringSet.has(nb) && !used.has(nb)
-          );
-          if (!nextId) break;
-          const nextNode = capDonors.find((c) => c.id === nextId)!;
-          orderedRing.push(nextNode);
-          used.add(nextNode.id);
-        }
-        const nRing = orderedRing.length;
-        const rCarbon = nRing === 6 ? 1.40 : nRing === 5 ? 1.21 : 1.02;
-        const zCap = 1.62;
-        orderedRing.forEach((cAtom, k) => {
-          const phi = Math.PI / 2 + (k * 2 * Math.PI) / Math.max(1, nRing);
-          const cx = Number((rCarbon * Math.cos(phi)).toFixed(3));
-          const cy = Number((rCarbon * Math.sin(phi)).toFixed(3));
-          coords3D.set(cAtom.id, [cx, cy, zCap]);
-          const subs = (adj.get(cAtom.id) || [])
-            .filter((nb) => nb !== centerAtom.id && !ringSet.has(nb))
-            .map((nb) => capLig.allAtoms.find((x) => x.id === nb))
-            .filter((x): x is AtomNode => Boolean(x));
-          subs.forEach((sub) => {
-            const rSub = rCarbon + (sub.element === 'H' ? 1.08 : 1.5);
-            coords3D.set(sub.id, [
-              Number((rSub * Math.cos(phi)).toFixed(3)),
-              Number((rSub * Math.sin(phi)).toFixed(3)),
-              Number((zCap + 0.12).toFixed(3)),
-            ]);
-          });
-        });
+        const zCap = getMetalCentroidDist(centerAtom.element, capDonors.length, false);
+        placeHapticRingCap3D(capLig, [0, 0, zCap], [0, 0, 1], [0, 1, 0], 0, 0.1);
       } else {
         placeDieneChelateComponent(capLig.allAtoms, [0, 0, 1], [1, 0, 0], [0, 1, 0]);
       }
 
-      // Place the 3 tripod legs at z < 0
+      // Place the 2, 3, or 4 tripod/bipod legs symmetrically at z < 0
       const rCenter = ELEMENT_PROPERTIES[centerAtom.element]?.covalentRadius ?? 1.25;
-      chelateTopo.ligands.slice(1, 4).forEach((leg, idx) => {
+      const legLigs = chelateTopo.ligands.slice(1);
+      const nLegs = legLigs.length;
+      legLigs.forEach((leg, idx) => {
         const d0 = leg.donors[0];
         const rBond = (rCenter + (ELEMENT_PROPERTIES[d0.element]?.covalentRadius ?? 0.75)) * 0.94;
-        const phi = Math.PI / 2 + (idx * 2 * Math.PI) / 3;
-        const sinT = 0.819; // sin(55°)
-        const cosT = -0.574; // -cos(55°)
+        const phi =
+          nLegs === 2
+            ? idx * Math.PI // in XZ plane -> Cs mirror plane!
+            : Math.PI / 2 + (idx * 2 * Math.PI) / Math.max(1, nLegs);
+        const tiltRad = nLegs === 2 ? (46 * Math.PI) / 180 : (55 * Math.PI) / 180;
+        const sinT = Math.sin(tiltRad);
+        const cosT = -Math.cos(tiltRad);
         const ux = sinT * Math.cos(phi);
         const uy = sinT * Math.sin(phi);
         const uz = cosT;

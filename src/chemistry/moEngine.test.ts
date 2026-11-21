@@ -6,14 +6,19 @@ import {
   decomposeReducibleRepresentation,
 } from './symmetryData.ts';
 import {
+  analyzeChelateOrSandwichTopology,
   analyzeMolecularGraph,
   computeMolecularFormula,
+  detectHapticRingCoordinations,
   detectPointGroup,
   evaluateOrbitalWavefunction,
   jacobiEigenvalues,
   parseChemicalInputToGraph,
   reconstruct3DGeometryFromVSEPR,
 } from './moEngine.ts';
+import { detectExactPointGroup3D } from './symmetryV3.ts';
+import { runLowdinGeneralizedEHT } from './quantumEngineV3.ts';
+import { parseSdfToGraph } from './pubchemService.ts';
 import {
   formulaToLatex,
   irrepToLatex,
@@ -1408,5 +1413,223 @@ test('Complexes with larger alkene, chelating diene (Ni(COD)2, Pt(COD)Cl2, Pt(nb
     check3DGeometry(mol, name);
   }
 });
+
+test('General haptic-ring organometallics (Ferrocene, substituted metallocenes, bent metallocenes, half-sandwiches, bis-arenes) build clean 2D layouts, 3D geometries, exact symmetries, and dipole moments', () => {
+  const minPairwise2D = (atoms: { x2d: number; y2d: number }[]): number => {
+    let minD = Infinity;
+    for (let i = 0; i < atoms.length; i++) {
+      for (let j = i + 1; j < atoms.length; j++) {
+        const d = Math.hypot(atoms[i].x2d - atoms[j].x2d, atoms[i].y2d - atoms[j].y2d);
+        if (d < minD) minD = d;
+      }
+    }
+    return minD;
+  };
+
+  const minPairwise3D = (atoms: { x3d: number; y3d: number; z3d: number }[]): number => {
+    let minD = Infinity;
+    for (let i = 0; i < atoms.length; i++) {
+      for (let j = i + 1; j < atoms.length; j++) {
+        const d = Math.hypot(
+          atoms[i].x3d - atoms[j].x3d,
+          atoms[i].y3d - atoms[j].y3d,
+          atoms[i].z3d - atoms[j].z3d
+        );
+        if (d < minD) minD = d;
+      }
+    }
+    return minD;
+  };
+
+  // 1. Ferrocene (disconnected PubChem ionic form AND η¹-bonded SMILES form)
+  for (const [label, smi] of [
+    ['Ferrocene (ionic PubChem form)', '[CH-]1C=CC=C1.[CH-]1C=CC=C1.[Fe+2]'],
+    ['Ferrocene (η1-bonded form)', 'C1=CC=CC1[Fe]C1C=CC=C1'],
+  ] as const) {
+    const parsed = parseChemicalInputToGraph(smi, 'SMILES')!;
+    const mol = analyzeMolecularGraph(parsed.atoms, parsed.bonds);
+    assert.equal(mol.formula, 'C10H10Fe', `${label} must have formula C10H10Fe`);
+    assert.equal(mol.atoms.length, 21, `${label} must have 21 atoms`);
+    assert.equal(mol.pointGroupId, 'D5d', `${label} must classify as D5d`);
+    const hr = detectHapticRingCoordinations(mol.atoms, mol.bonds);
+    assert.equal(hr.length, 2, `${label} must detect 2 haptic rings`);
+    assert.deepEqual(
+      hr.map((h) => h.hapticity),
+      [5, 5],
+      `${label} must have two η5 rings`
+    );
+    const symV3 = detectExactPointGroup3D(mol.atoms);
+    assert.equal(symV3.pointGroup.id, 'D5d', `${label} 3D exact point group must be D5d`);
+    const eht = runLowdinGeneralizedEHT(mol.atoms, mol.bonds, 0);
+    assert.ok(
+      eht.dipoleMagnitudeDebye < 0.05,
+      `${label} centrosymmetric D5d sandwich must have ~0 D dipole (got ${eht.dipoleMagnitudeDebye.toFixed(3)} D)`
+    );
+    assert.ok(minPairwise3D(mol.atoms) > 0.9, `${label} 3D atoms must have no clashes`);
+    if (label.includes('PubChem')) {
+      assert.ok(
+        minPairwise2D(parsed.atoms) > 0.45,
+        `${label} 2D layout must be clean and collision-free (min2d=${minPairwise2D(parsed.atoms).toFixed(2)})`
+      );
+    }
+  }
+
+  // 2. Substituted metallocenes: Decamethylferrocene Fe(Cp*)2, Acetylferrocene, Ferrocenecarboxylic acid
+  const cpStarParsed = parseChemicalInputToGraph(
+    'CC1=C(C)C(C)=C(C)[C-]1C.CC1=C(C)C(C)=C(C)[C-]1C.[Fe+2]',
+    'SMILES'
+  )!;
+  const cpStar = analyzeMolecularGraph(cpStarParsed.atoms, cpStarParsed.bonds);
+  assert.equal(cpStar.formula, 'C20H30Fe', 'Decamethylferrocene must have exact formula C20H30Fe (no spurious H)');
+  assert.equal(cpStar.atoms.length, 51, 'Decamethylferrocene must have 51 atoms');
+  assert.equal(cpStar.pointGroupId, 'D5d', 'Decamethylferrocene must classify as D5d');
+  assert.equal(
+    detectExactPointGroup3D(cpStar.atoms).pointGroup.id,
+    'D5d',
+    'Decamethylferrocene 3D coordinates must have exact D5d symmetry'
+  );
+  assert.equal(
+    detectHapticRingCoordinations(cpStar.atoms, cpStar.bonds).length,
+    2,
+    'Decamethylferrocene must have 2 η5 rings'
+  );
+  assert.ok(
+    runLowdinGeneralizedEHT(cpStar.atoms, cpStar.bonds, 0).dipoleMagnitudeDebye < 0.05,
+    'Decamethylferrocene D5d must have ~0 D dipole'
+  );
+
+  for (const [label, smi, expectedFormula] of [
+    ['Acetylferrocene', 'CC(=O)[C-]1C=CC=C1.[CH-]1C=CC=C1.[Fe+2]', 'C12H12FeO'],
+    ['Ferrocenecarboxylic acid', 'O=C(O)[C-]1C=CC=C1.[CH-]1C=CC=C1.[Fe+2]', 'C11H10FeO2'],
+  ] as const) {
+    const p = parseChemicalInputToGraph(smi, 'SMILES')!;
+    const m = analyzeMolecularGraph(p.atoms, p.bonds);
+    assert.equal(m.formula, expectedFormula, `${label} must have formula ${expectedFormula}`);
+    const hr = detectHapticRingCoordinations(m.atoms, m.bonds);
+    assert.equal(hr.length, 2, `${label} must coordinate via both η5 Cp rings (not carbonyl/carboxyl O)`);
+    const fe = m.atoms.find((a) => a.element === 'Fe')!;
+    const feBondedElements = m.bonds
+      .filter((b) => b.source === fe.id || b.target === fe.id)
+      .map((b) => m.atoms.find((a) => a.id === (b.source === fe.id ? b.target : b.source))!.element);
+    assert.ok(
+      feBondedElements.every((el) => el === 'C') && feBondedElements.length === 10,
+      `${label} Fe must bond strictly to 10 Cp ring carbons (got ${feBondedElements.join(',')})`
+    );
+    assert.ok(minPairwise3D(m.atoms) > 0.9, `${label} 3D atoms must have no clashes`);
+    assert.ok(minPairwise2D(p.atoms) > 0.45, `${label} 2D layout must have no clashes`);
+  }
+
+  // 3. Bent metallocenes: Titanocene dichloride Cp2TiCl2 & Zirconocene dichloride Cp2ZrCl2 -> C2v
+  for (const [label, smi, metalEl] of [
+    ['Titanocene dichloride', '[CH-]1C=CC=C1.[CH-]1C=CC=C1.Cl[Ti+2]Cl', 'Ti'],
+    ['Zirconocene dichloride', '[CH-]1C=CC=C1.[CH-]1C=CC=C1.Cl[Zr+2]Cl', 'Zr'],
+  ] as const) {
+    const p = parseChemicalInputToGraph(smi, 'SMILES')!;
+    const m = analyzeMolecularGraph(p.atoms, p.bonds);
+    assert.equal(m.atoms.length, 23, `${label} must have 23 atoms`);
+    const topo = analyzeChelateOrSandwichTopology(m.atoms, m.bonds);
+    assert.equal(topo?.kind, 'bent_metallocene', `${label} must detect bent_metallocene topology`);
+    assert.equal(m.pointGroupId, 'C2v', `${label} must classify as C2v`);
+    assert.equal(
+      detectExactPointGroup3D(m.atoms).pointGroup.id,
+      'C2v',
+      `${label} 3D coordinates must have exact C2v symmetry`
+    );
+    const hr = detectHapticRingCoordinations(m.atoms, m.bonds);
+    assert.equal(hr.length, 2, `${label} must detect 2 η5 Cp rings`);
+    // Verify centroid-M-centroid bend angle (~131°) and Cl-M-Cl angle (~95°)
+    const metal = m.atoms.find((a) => a.element === metalEl)!;
+    const centroids = hr.map((h) => {
+      const cs = h.ringCarbonIds.map((id) => m.atoms.find((a) => a.id === id)!);
+      return [
+        cs.reduce((s, a) => s + a.x3d, 0) / cs.length - metal.x3d,
+        cs.reduce((s, a) => s + a.y3d, 0) / cs.length - metal.y3d,
+        cs.reduce((s, a) => s + a.z3d, 0) / cs.length - metal.z3d,
+      ];
+    });
+    const dot =
+      centroids[0][0] * centroids[1][0] +
+      centroids[0][1] * centroids[1][1] +
+      centroids[0][2] * centroids[1][2];
+    const norm0 = Math.hypot(...centroids[0]);
+    const norm1 = Math.hypot(...centroids[1]);
+    const bendDeg = (Math.acos(Math.max(-1, Math.min(1, dot / (norm0 * norm1)))) * 180) / Math.PI;
+    assert.ok(
+      bendDeg >= 125 && bendDeg <= 138,
+      `${label} centroid-M-centroid angle must be ~131° (got ${bendDeg.toFixed(1)}°)`
+    );
+    assert.ok(minPairwise3D(m.atoms) > 0.9, `${label} 3D atoms must have no clashes`);
+    assert.ok(minPairwise2D(p.atoms) > 0.45, `${label} 2D layout must have no clashes`);
+  }
+
+  // 4. Half-sandwich / piano-stool complexes: 3-legged Cymantrene CpMn(CO)3, 2-legged CpCo(CO)2, substituted (toluene)Cr(CO)3
+  for (const [label, smi, expectedHr] of [
+    ['Cymantrene CpMn(CO)3', '[CH-]1C=CC=C1.[C-]#[O+].[C-]#[O+].[C-]#[O+].[Mn+]', 5],
+    ['CpCo(CO)2 (2-legged piano stool)', '[CH-]1C=CC=C1.[C-]#[O+].[C-]#[O+].[Co+]', 5],
+    ['(Toluene)Cr(CO)3 (substituted arene piano stool)', 'Cc1ccccc1.[C-]#[O+].[C-]#[O+].[C-]#[O+].[Cr]', 6],
+  ] as const) {
+    const p = parseChemicalInputToGraph(smi, 'SMILES')!;
+    const m = analyzeMolecularGraph(p.atoms, p.bonds);
+    const topo = analyzeChelateOrSandwichTopology(m.atoms, m.bonds);
+    assert.equal(topo?.kind, 'piano_stool_sandwich', `${label} must detect piano_stool_sandwich topology`);
+    const hr = detectHapticRingCoordinations(m.atoms, m.bonds);
+    assert.equal(hr.length, 1, `${label} must detect 1 haptic ring`);
+    assert.equal(hr[0].hapticity, expectedHr, `${label} must have η${expectedHr} hapticity`);
+    assert.ok(minPairwise3D(m.atoms) > 0.9, `${label} 3D atoms must have no clashes`);
+    assert.ok(minPairwise2D(p.atoms) > 0.45, `${label} 2D layout must have no clashes`);
+  }
+
+  // 5. Bis(benzene)chromium D6h exact 3D symmetry & zero dipole + SDF M  CHG bogus +6 normalization
+  const crBzParsed = parseChemicalInputToGraph(
+    '[CH-]1[CH-][CH-][CH-][CH-][CH-]1.[CH-]1[CH-][CH-][CH-][CH-][CH-]1.[Cr]',
+    'SMILES'
+  )!;
+  const crBz = analyzeMolecularGraph(crBzParsed.atoms, crBzParsed.bonds);
+  assert.equal(detectExactPointGroup3D(crBz.atoms).pointGroup.id, 'D6h', 'Cr(C6H6)2 3D symmetry must be D6h');
+  assert.ok(
+    runLowdinGeneralizedEHT(crBz.atoms, crBz.bonds, 0).dipoleMagnitudeDebye < 0.05,
+    'Cr(C6H6)2 must have ~0 D dipole'
+  );
+
+  const syntheticBenchrotreneSdf = [
+    'Benchrotrene',
+    '  PubChem',
+    '',
+    ' 13  9  0  0  0  0  0  0  0  0999 V2000',
+    '    0.0000    0.0000    0.0000 Cr  0  0  0  0  0  0  0  0  0  0  0  0',
+    '    1.0000    1.0000    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0',
+    '    2.0000    1.0000    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0',
+    '    2.5000    2.0000    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0',
+    '    2.0000    3.0000    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0',
+    '    1.0000    3.0000    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0',
+    '    0.5000    2.0000    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0',
+    '   -1.0000   -1.0000    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0',
+    '   -1.0000   -2.0000    0.0000 O   0  0  0  0  0  0  0  0  0  0  0  0',
+    '    0.0000   -1.0000    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0',
+    '    0.0000   -2.0000    0.0000 O   0  0  0  0  0  0  0  0  0  0  0  0',
+    '    1.0000   -1.0000    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0',
+    '    1.0000   -2.0000    0.0000 O   0  0  0  0  0  0  0  0  0  0  0  0',
+    '  2  3  2  0  0  0  0',
+    '  3  4  1  0  0  0  0',
+    '  4  5  2  0  0  0  0',
+    '  5  6  1  0  0  0  0',
+    '  6  7  2  0  0  0  0',
+    '  7  2  1  0  0  0  0',
+    '  8  9  3  0  0  0  0',
+    ' 10 11  3  0  0  0  0',
+    ' 12 13  3  0  0  0  0',
+    'M  CHG  7   1   6   8  -1   9   1  10  -1  11   1  12  -1  13   1',
+    'M  END',
+  ].join('\n');
+  const parsedBench = parseSdfToGraph(syntheticBenchrotreneSdf, 'C9H6CrO3');
+  assert.equal(
+    parsedBench.normalizedChargeDelta,
+    -6,
+    'parseSdfToGraph must parse M  CHG and compute normalizedChargeDelta = -6 for PubChem [Cr+6] benchrotrene'
+  );
+  const benchMol = analyzeMolecularGraph(parsedBench.atoms, parsedBench.bonds);
+  assert.equal(detectExactPointGroup3D(benchMol.atoms).pointGroup.id, 'C3v', 'Benchrotrene 3D symmetry must be C3v');
+});
+
 
 

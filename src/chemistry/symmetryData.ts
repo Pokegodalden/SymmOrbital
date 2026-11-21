@@ -645,6 +645,362 @@ export const POINT_GROUPS: Record<string, PointGroupData> = {
       { id: 'sigma_pi', label: 'Γ_val (4 In-plane A\' + 2 Out-of-plane A\'\')', characters: [6, 2], description: 'Decomposes into 4A\' (σ) + 2A\'\' (π)' },
     ],
   },
+
+  C1: {
+    id: 'C1',
+    schoenflies: 'C1',
+    name: 'Trivial / Chiral Asymmetric',
+    order: 1,
+    family: 'Low Symmetry',
+    description: 'Contains only the identity operation E. Characteristic of chiral asymmetric molecules (e.g., CHFClBr, ATP, amino acids). All orbitals transform as the totally symmetric A representation.',
+    classes: [
+      { id: 'E', symbol: 'E', operationType: 'E', count: 1, description: 'Identity operation' },
+    ],
+    irreps: [
+      { symbol: 'A', id: 'A', dimension: 1, characters: [1], linearFunctions: ['x', 'y', 'z', 'Rx', 'Ry', 'Rz'], quadraticFunctions: ['x²', 'y²', 'z²', 'xy', 'xz', 'yz'], orbitalBasis: 'All s, p, d, f orbitals', irActive: true, ramanActive: true, description: 'Sole totally symmetric irreducible representation of the trivial group.' },
+    ],
+    elements3D: [],
+    defaultReduciblePresets: [
+      { id: 'c1_val', label: 'Γ_val (4 Valence AOs)', characters: [4], description: 'Trivially decomposes into 4A' },
+    ],
+  },
+
+  Ci: {
+    id: 'Ci',
+    schoenflies: 'Ci',
+    name: 'Centrosymmetric Inversion',
+    order: 2,
+    family: 'Low Symmetry',
+    description: 'Contains only the identity E and a center of inversion i. Orbitals partition strictly by parity into gerade (Ag) and ungerade (Au). Examples: meso-tartaric acid, anti-1,2-dichloro-1,2-difluoroethane.',
+    classes: [
+      { id: 'E', symbol: 'E', operationType: 'E', count: 1, description: 'Identity operation' },
+      { id: 'i', symbol: 'i', operationType: 'i', count: 1, description: 'Inversion through the molecular center' },
+    ],
+    irreps: [
+      { symbol: 'Ag', id: 'Ag', dimension: 1, characters: [1, 1], linearFunctions: ['Rx', 'Ry', 'Rz'], quadraticFunctions: ['x²', 'y²', 'z²', 'xy', 'xz', 'yz'], orbitalBasis: 's, d-orbitals (gerade)', irActive: false, ramanActive: true, description: 'Symmetric (gerade) under inversion; Raman active, IR forbidden (mutual exclusion).' },
+      { symbol: 'Au', id: 'Au', dimension: 1, characters: [1, -1], linearFunctions: ['x', 'y', 'z'], quadraticFunctions: [], orbitalBasis: 'px, py, pz, f-orbitals (ungerade)', irActive: true, ramanActive: false, description: 'Antisymmetric (ungerade) under inversion; IR active, Raman forbidden.' },
+    ],
+    elements3D: [
+      { id: 'inv', type: 'center', label: 'Inversion Center i', schoenflies: 'i', color: '#DC2626', description: 'Center of inversion' },
+    ],
+    defaultReduciblePresets: [
+      { id: 'ci_pair', label: 'Γ_pair (2 Inversion-Related AOs)', characters: [2, 0], description: 'Decomposes into Ag + Au' },
+    ],
+  },
+
+  C2: {
+    id: 'C2',
+    schoenflies: 'C2',
+    name: 'Chiral 2-Fold Rotational',
+    order: 2,
+    family: 'Cn (Chiral Axial)',
+    description: 'Contains a single proper 2-fold rotation axis C2 without mirror planes or inversion. Chiral point group of H2O2 (gauche), hydrazine, and skewed biaryls.',
+    classes: [
+      { id: 'E', symbol: 'E', operationType: 'E', count: 1, description: 'Identity operation' },
+      { id: 'C2', symbol: 'C2(z)', operationType: 'Cn', count: 1, description: '180° rotation around the principal C2 axis' },
+    ],
+    irreps: [
+      { symbol: 'A', id: 'A', dimension: 1, characters: [1, 1], linearFunctions: ['z', 'Rz'], quadraticFunctions: ['x²', 'y²', 'z²', 'xy'], orbitalBasis: 's, pz, dz², dx²-y², dxy', irActive: true, ramanActive: true, description: 'Symmetric under C2(z) rotation.' },
+      { symbol: 'B', id: 'B', dimension: 1, characters: [1, -1], linearFunctions: ['x', 'y', 'Rx', 'Ry'], quadraticFunctions: ['xz', 'yz'], orbitalBasis: 'px, py, dxz, dyz', irActive: true, ramanActive: true, description: 'Antisymmetric under C2(z) rotation.' },
+    ],
+    elements3D: [
+      { id: 'c2_z', type: 'axis', label: 'C2 (z-axis)', schoenflies: 'C2', fold: 2, axis: [0, 0, 1], color: '#2563EB', description: 'Principal 180° rotational symmetry axis' },
+    ],
+    defaultReduciblePresets: [
+      { id: 'c2_bonds', label: 'Γ_σ (2 Equivalent O–H Bonds in H2O2)', characters: [2, 0], description: 'Decomposes into A + B' },
+    ],
+  },
+
+  C2h: {
+    id: 'C2h',
+    schoenflies: 'C2h',
+    name: 'Centrosymmetric Planar 2-Fold',
+    order: 4,
+    family: 'Cnh (Centrosymmetric Planar)',
+    description: 'Features a C2 axis perpendicular to a horizontal mirror plane σh and an inversion center i. Classic examples: trans-1,3-butadiene, trans-1,2-dichloroethene, trans-N2F2.',
+    classes: [
+      { id: 'E', symbol: 'E', operationType: 'E', count: 1, description: 'Identity operation' },
+      { id: 'C2', symbol: 'C2(z)', operationType: 'Cn', count: 1, description: '180° rotation perpendicular to molecular plane' },
+      { id: 'i', symbol: 'i', operationType: 'i', count: 1, description: 'Inversion through the molecular center' },
+      { id: 'sigma_h', symbol: 'σh(xy)', operationType: 'sigma_h', count: 1, description: 'Horizontal mirror plane containing the molecule' },
+    ],
+    irreps: [
+      { symbol: 'Ag', id: 'Ag', dimension: 1, characters: [1, 1, 1, 1], linearFunctions: ['Rz'], quadraticFunctions: ['x²', 'y²', 'z²', 'xy'], orbitalBasis: 's, dz², dx²-y², dxy', irActive: false, ramanActive: true, description: 'Totally symmetric in-plane gerade orbital.' },
+      { symbol: 'Bg', id: 'Bg', dimension: 1, characters: [1, -1, 1, -1], linearFunctions: ['Rx', 'Ry'], quadraticFunctions: ['xz', 'yz'], orbitalBasis: 'dxz, dyz (π gerade)', irActive: false, ramanActive: true, description: 'Out-of-plane π gerade orbital (HOMO of trans-butadiene).' },
+      { symbol: 'Au', id: 'Au', dimension: 1, characters: [1, 1, -1, -1], linearFunctions: ['z'], quadraticFunctions: [], orbitalBasis: 'pz (π ungerade)', irActive: true, ramanActive: false, description: 'Out-of-plane π ungerade orbital (lowest π bonding MO of trans-butadiene).' },
+      { symbol: 'Bu', id: 'Bu', dimension: 1, characters: [1, -1, -1, 1], linearFunctions: ['x', 'y'], quadraticFunctions: [], orbitalBasis: 'px, py (σ ungerade)', irActive: true, ramanActive: false, description: 'In-plane σ ungerade orbital.' },
+    ],
+    elements3D: [
+      { id: 'c2_z', type: 'axis', label: 'C2 (z-axis)', schoenflies: 'C2', fold: 2, axis: [0, 0, 1], color: '#2563EB', description: 'Principal C2 axis perpendicular to the molecular plane' },
+      { id: 'sigma_h', type: 'plane', label: 'σh (Molecular Plane)', schoenflies: 'σh', axis: [0, 0, 1], color: '#0D9488', description: 'Horizontal mirror plane' },
+      { id: 'inv', type: 'center', label: 'Inversion Center i', schoenflies: 'i', color: '#DC2626', description: 'Center of inversion' },
+    ],
+    defaultReduciblePresets: [
+      { id: 'c2h_pi', label: 'Γ_π (trans-Butadiene 4 pz AOs)', characters: [4, 0, 0, -4], description: 'Decomposes into 2Au + 2Bg' },
+    ],
+  },
+
+  C3h: {
+    id: 'C3h',
+    schoenflies: 'C3h',
+    name: 'Planar 3-Fold Horizontal Mirror',
+    order: 6,
+    family: 'Cnh',
+    description: 'Contains a 3-fold rotation axis C3, horizontal mirror plane σh, and improper S3 axis, without vertical mirror planes. Classic example: boric acid B(OH)3.',
+    classes: [
+      { id: 'E', symbol: 'E', operationType: 'E', count: 1, description: 'Identity operation' },
+      { id: '2C3', symbol: '2C3', operationType: 'Cn', count: 2, description: '±120° rotations around principal axis' },
+      { id: 'sigma_h', symbol: 'σh', operationType: 'sigma_h', count: 1, description: 'Horizontal mirror plane' },
+      { id: '2S3', symbol: '2S3', operationType: 'Sn', count: 2, description: '±120° improper rotations' },
+    ],
+    irreps: [
+      { symbol: 'A\'', id: 'Ap', dimension: 1, characters: [1, 1, 1, 1], linearFunctions: ['Rz'], quadraticFunctions: ['x²+y²', 'z²'], orbitalBasis: 's, dz²', irActive: false, ramanActive: true, description: 'Totally symmetric in-plane representation.' },
+      { symbol: 'E\'', id: 'Ep', dimension: 2, characters: [2, -1, 2, -1], linearFunctions: ['(x, y)'], quadraticFunctions: ['(x²-y², xy)'], orbitalBasis: '(px, py), (dx²-y², dxy)', irActive: true, ramanActive: true, description: 'Doubly degenerate in-plane representation.' },
+      { symbol: 'A\'\'', id: 'App', dimension: 1, characters: [1, 1, -1, -1], linearFunctions: ['z'], quadraticFunctions: [], orbitalBasis: 'pz', irActive: true, ramanActive: false, description: 'Out-of-plane totally symmetric with respect to C3.' },
+      { symbol: 'E\'\'', id: 'Epp', dimension: 2, characters: [2, -1, -2, 1], linearFunctions: ['(Rx, Ry)'], quadraticFunctions: ['(xz, yz)'], orbitalBasis: '(dxz, dyz)', irActive: false, ramanActive: true, description: 'Doubly degenerate out-of-plane representation.' },
+    ],
+    elements3D: [
+      { id: 'c3_z', type: 'axis', label: 'C3 (z-axis)', schoenflies: 'C3', fold: 3, axis: [0, 0, 1], color: '#2563EB', description: 'Principal 3-fold rotation axis' },
+      { id: 'sigma_h', type: 'plane', label: 'σh (xy-plane)', schoenflies: 'σh', axis: [0, 0, 1], color: '#0D9488', description: 'Horizontal mirror plane' },
+    ],
+    defaultReduciblePresets: [
+      { id: 'c3h_sigma', label: 'Γ_σ (3 B–O Bonds)', characters: [3, 0, 3, 0], description: 'Decomposes into A\' + E\'' },
+    ],
+  },
+
+  D2: {
+    id: 'D2',
+    schoenflies: 'D2',
+    name: 'Chiral Orthorhombic Dihedral',
+    order: 4,
+    family: 'Dn (Chiral Dihedral)',
+    description: 'Contains three mutually orthogonal C2 rotation axes (x, y, z) and no mirror planes or inversion center. Classic example: twisted biphenyl or twisted ethylene (0° < θ < 90°).',
+    classes: [
+      { id: 'E', symbol: 'E', operationType: 'E', count: 1, description: 'Identity operation' },
+      { id: 'C2z', symbol: 'C2(z)', operationType: 'Cn', count: 1, description: '180° rotation about z' },
+      { id: 'C2y', symbol: 'C2(y)', operationType: 'Cn', count: 1, description: '180° rotation about y' },
+      { id: 'C2x', symbol: 'C2(x)', operationType: 'Cn', count: 1, description: '180° rotation about x' },
+    ],
+    irreps: [
+      { symbol: 'A', id: 'A', dimension: 1, characters: [1, 1, 1, 1], linearFunctions: [], quadraticFunctions: ['x²', 'y²', 'z²'], orbitalBasis: 's, dz², dx²-y²', irActive: false, ramanActive: true, description: 'Totally symmetric under all three C2 axes.' },
+      { symbol: 'B1', id: 'B1', dimension: 1, characters: [1, 1, -1, -1], linearFunctions: ['z', 'Rz'], quadraticFunctions: ['xy'], orbitalBasis: 'pz, dxy', irActive: true, ramanActive: true, description: 'Symmetric under C2(z), antisymmetric under C2(x) and C2(y).' },
+      { symbol: 'B2', id: 'B2', dimension: 1, characters: [1, -1, 1, -1], linearFunctions: ['y', 'Ry'], quadraticFunctions: ['xz'], orbitalBasis: 'py, dxz', irActive: true, ramanActive: true, description: 'Symmetric under C2(y), antisymmetric under C2(z) and C2(x).' },
+      { symbol: 'B3', id: 'B3', dimension: 1, characters: [1, -1, -1, 1], linearFunctions: ['x', 'Rx'], quadraticFunctions: ['yz'], orbitalBasis: 'px, dyz', irActive: true, ramanActive: true, description: 'Symmetric under C2(x), antisymmetric under C2(z) and C2(y).' },
+    ],
+    elements3D: [
+      { id: 'c2_z', type: 'axis', label: 'C2(z)', schoenflies: 'C2', fold: 2, axis: [0, 0, 1], color: '#2563EB', description: '2-fold rotation axis along z' },
+      { id: 'c2_y', type: 'axis', label: 'C2(y)', schoenflies: 'C2', fold: 2, axis: [0, 1, 0], color: '#0D9488', description: '2-fold rotation axis along y' },
+      { id: 'c2_x', type: 'axis', label: 'C2(x)', schoenflies: 'C2', fold: 2, axis: [1, 0, 0], color: '#D97706', description: '2-fold rotation axis along x' },
+    ],
+    defaultReduciblePresets: [
+      { id: 'd2_four', label: 'Γ_4 (4 Equivalent Substituents)', characters: [4, 0, 0, 0], description: 'Decomposes into A + B1 + B2 + B3' },
+    ],
+  },
+
+  D3d: {
+    id: 'D3d',
+    schoenflies: 'D3d',
+    name: 'Trigonal Antiprismatic / Staggered',
+    order: 12,
+    family: 'Dnd (Antiprismatic)',
+    description: 'Features a C3 principal axis, 3 perpendicular C2 axes, an inversion center i, S6 improper axis, and 3 dihedral mirror planes σd. Classic examples: staggered ethane (C2H6), chair cyclohexane (C6H12).',
+    classes: [
+      { id: 'E', symbol: 'E', operationType: 'E', count: 1, description: 'Identity operation' },
+      { id: '2C3', symbol: '2C3', operationType: 'Cn', count: 2, description: '±120° rotations around C3' },
+      { id: '3C2', symbol: '3C2\'', operationType: 'Cn', count: 3, description: 'Three perpendicular C2 axes bisecting staggered bonds' },
+      { id: 'i', symbol: 'i', operationType: 'i', count: 1, description: 'Inversion center' },
+      { id: '2S6', symbol: '2S6', operationType: 'Sn', count: 2, description: '±60° improper rotations' },
+      { id: '3sigma_d', symbol: '3σd', operationType: 'sigma_d', count: 3, description: 'Three dihedral mirror planes' },
+    ],
+    irreps: [
+      { symbol: 'A1g', id: 'A1g', dimension: 1, characters: [1, 1, 1, 1, 1, 1], linearFunctions: [], quadraticFunctions: ['x²+y²', 'z²'], orbitalBasis: 's, dz²', irActive: false, ramanActive: true, description: 'Totally symmetric gerade representation.' },
+      { symbol: 'A2g', id: 'A2g', dimension: 1, characters: [1, 1, -1, 1, 1, -1], linearFunctions: ['Rz'], quadraticFunctions: [], orbitalBasis: 'Rz', irActive: false, ramanActive: false, description: 'Gerade representation antisymmetric under C2\' and σd.' },
+      { symbol: 'Eg', id: 'Eg', dimension: 2, characters: [2, -1, 0, 2, -1, 0], linearFunctions: ['(Rx, Ry)'], quadraticFunctions: ['(x²-y², xy)', '(xz, yz)'], orbitalBasis: '(dx²-y², dxy), (dxz, dyz)', irActive: false, ramanActive: true, description: 'Doubly degenerate gerade representation (HOMO of staggered ethane).' },
+      { symbol: 'A1u', id: 'A1u', dimension: 1, characters: [1, 1, 1, -1, -1, -1], linearFunctions: [], quadraticFunctions: [], orbitalBasis: 'f(x³-3xy²)', irActive: false, ramanActive: false, description: 'Ungerade representation symmetric under C3 and C2\'.' },
+      { symbol: 'A2u', id: 'A2u', dimension: 1, characters: [1, 1, -1, -1, -1, 1], linearFunctions: ['z'], quadraticFunctions: [], orbitalBasis: 'pz, fz³', irActive: true, ramanActive: false, description: 'Axial ungerade representation.' },
+      { symbol: 'Eu', id: 'Eu', dimension: 2, characters: [2, -1, 0, -2, 1, 0], linearFunctions: ['(x, y)'], quadraticFunctions: [], orbitalBasis: '(px, py)', irActive: true, ramanActive: false, description: 'Doubly degenerate ungerade representation.' },
+    ],
+    elements3D: [
+      { id: 'c3_z', type: 'axis', label: 'C3 / S6 (z-axis)', schoenflies: 'C3', fold: 3, axis: [0, 0, 1], color: '#2563EB', description: 'Principal 3-fold rotation & S6 improper axis' },
+      { id: 'c2_1', type: 'axis', label: 'C2\' (Perpendicular)', schoenflies: 'C2\'', fold: 2, axis: [1, 0, 0], color: '#0284C7', description: 'Perpendicular C2 axis' },
+      { id: 'sigma_d', type: 'plane', label: 'σd (Dihedral Plane)', schoenflies: 'σd', axis: [0, 1, 0], color: '#0D9488', description: 'Dihedral mirror plane' },
+      { id: 'inv', type: 'center', label: 'Inversion Center i', schoenflies: 'i', color: '#DC2626', description: 'Center of inversion' },
+    ],
+    defaultReduciblePresets: [
+      { id: 'ethane_ch', label: 'Γ_CH (6 Staggered C–H Bonds)', characters: [6, 0, 0, 0, 0, 2], description: 'Decomposes into A1g + Eg + A2u + Eu' },
+    ],
+  },
+
+  D4d: {
+    id: 'D4d',
+    schoenflies: 'D4d',
+    name: 'Square Antiprismatic',
+    order: 16,
+    family: 'Dnd (Antiprismatic)',
+    description: 'Features a C4 principal axis, S8 improper axis, 4 perpendicular C2\' axes, and 4 dihedral mirror planes σd. Classic examples: S8 crown ring, Mn2(CO)10 (staggered), [TaF8]3-.',
+    classes: [
+      { id: 'E', symbol: 'E', operationType: 'E', count: 1, description: 'Identity operation' },
+      { id: '2S8', symbol: '2S8', operationType: 'Sn', count: 2, description: '±45° improper rotations' },
+      { id: '2C4', symbol: '2C4', operationType: 'Cn', count: 2, description: '±90° proper rotations' },
+      { id: '2S83', symbol: '2S8³', operationType: 'Sn', count: 2, description: '±135° improper rotations' },
+      { id: 'C2', symbol: 'C2', operationType: 'Cn', count: 1, description: '180° rotation about principal axis' },
+      { id: '4C2p', symbol: '4C2\'', operationType: 'Cn', count: 4, description: 'Four perpendicular 2-fold axes' },
+      { id: '4sigma_d', symbol: '4σd', operationType: 'sigma_d', count: 4, description: 'Four dihedral mirror planes' },
+    ],
+    irreps: [
+      { symbol: 'A1', id: 'A1', dimension: 1, characters: [1, 1, 1, 1, 1, 1, 1], linearFunctions: [], quadraticFunctions: ['x²+y²', 'z²'], orbitalBasis: 's, dz²', irActive: false, ramanActive: true, description: 'Totally symmetric representation.' },
+      { symbol: 'A2', id: 'A2', dimension: 1, characters: [1, 1, 1, 1, 1, -1, -1], linearFunctions: ['Rz'], quadraticFunctions: [], orbitalBasis: 'Rz', irActive: false, ramanActive: false, description: 'Antisymmetric under C2\' and σd.' },
+      { symbol: 'B1', id: 'B1', dimension: 1, characters: [1, -1, 1, -1, 1, 1, -1], linearFunctions: [], quadraticFunctions: [], orbitalBasis: '', irActive: false, ramanActive: false, description: 'Antisymmetric under S8 and σd.' },
+      { symbol: 'B2', id: 'B2', dimension: 1, characters: [1, -1, 1, -1, 1, -1, 1], linearFunctions: ['z'], quadraticFunctions: [], orbitalBasis: 'pz', irActive: true, ramanActive: false, description: 'Axial polar representation along z.' },
+      { symbol: 'E1', id: 'E1', dimension: 2, characters: [2, 1.4142, 0, -1.4142, -2, 0, 0], linearFunctions: ['(x, y)'], quadraticFunctions: [], orbitalBasis: '(px, py)', irActive: true, ramanActive: false, description: 'Doubly degenerate IR-active representation.' },
+      { symbol: 'E2', id: 'E2', dimension: 2, characters: [2, 0, -2, 0, 2, 0, 0], linearFunctions: [], quadraticFunctions: ['(x²-y², xy)'], orbitalBasis: '(dx²-y², dxy)', irActive: false, ramanActive: true, description: 'Doubly degenerate equatorial d-orbital representation.' },
+      { symbol: 'E3', id: 'E3', dimension: 2, characters: [2, -1.4142, 0, 1.4142, -2, 0, 0], linearFunctions: ['(Rx, Ry)'], quadraticFunctions: ['(xz, yz)'], orbitalBasis: '(dxz, dyz)', irActive: false, ramanActive: true, description: 'Doubly degenerate π-type d-orbital representation.' },
+    ],
+    elements3D: [
+      { id: 'c4_z', type: 'axis', label: 'C4 / S8 (z-axis)', schoenflies: 'C4', fold: 4, axis: [0, 0, 1], color: '#2563EB', description: 'Principal C4 and S8 axis' },
+      { id: 'sigma_d', type: 'plane', label: 'σd (Dihedral Plane)', schoenflies: 'σd', axis: [1, 0, 0], color: '#0D9488', description: 'Dihedral mirror plane' },
+    ],
+    defaultReduciblePresets: [
+      { id: 'd4d_s8', label: 'Γ_8 (8 Vertices of Square Antiprism / S8)', characters: [8, 0, 0, 0, 0, 0, 0], description: 'Decomposes into A1 + B2 + E1 + E2 + E3' },
+    ],
+  },
+
+  D5h: {
+    id: 'D5h',
+    schoenflies: 'D5h',
+    name: 'Pentagonal Bipyramidal / Eclipsed Sandwich',
+    order: 20,
+    family: 'Dnh (Prismatic / Sandwich)',
+    description: 'Features a 5-fold principal axis C5, 5 perpendicular C2 axes, horizontal mirror plane σh, and 5 vertical mirror planes σv. Classic examples: eclipsed ferrocene Fe(Cp)2, cyclopentadienyl anion Cp-, IF7.',
+    classes: [
+      { id: 'E', symbol: 'E', operationType: 'E', count: 1, description: 'Identity operation' },
+      { id: '2C5', symbol: '2C5', operationType: 'Cn', count: 2, description: '±72° rotations' },
+      { id: '2C52', symbol: '2C5²', operationType: 'Cn', count: 2, description: '±144° rotations' },
+      { id: '5C2', symbol: '5C2\'', operationType: 'Cn', count: 5, description: 'Five perpendicular C2 axes' },
+      { id: 'sigma_h', symbol: 'σh', operationType: 'sigma_h', count: 1, description: 'Horizontal mirror plane' },
+      { id: '2S5', symbol: '2S5', operationType: 'Sn', count: 2, description: '±72° improper rotations' },
+      { id: '2S53', symbol: '2S5³', operationType: 'Sn', count: 2, description: '±216° improper rotations' },
+      { id: '5sigma_v', symbol: '5σv', operationType: 'sigma_v', count: 5, description: 'Five vertical mirror planes' },
+    ],
+    irreps: [
+      { symbol: 'A1\'', id: 'A1p', dimension: 1, characters: [1, 1, 1, 1, 1, 1, 1, 1], linearFunctions: [], quadraticFunctions: ['x²+y²', 'z²'], orbitalBasis: 's, dz²', irActive: false, ramanActive: true, description: 'Totally symmetric representation.' },
+      { symbol: 'A2\'', id: 'A2p', dimension: 1, characters: [1, 1, 1, -1, 1, 1, 1, -1], linearFunctions: ['Rz'], quadraticFunctions: [], orbitalBasis: 'Rz', irActive: false, ramanActive: false, description: 'In-plane rotational representation.' },
+      { symbol: 'E1\'', id: 'E1p', dimension: 2, characters: [2, 0.618, -1.618, 0, 2, 0.618, -1.618, 0], linearFunctions: ['(x, y)'], quadraticFunctions: [], orbitalBasis: '(px, py)', irActive: true, ramanActive: false, description: 'Doubly degenerate in-plane IR-active representation.' },
+      { symbol: 'E2\'', id: 'E2p', dimension: 2, characters: [2, -1.618, 0.618, 0, 2, -1.618, 0.618, 0], linearFunctions: [], quadraticFunctions: ['(x²-y², xy)'], orbitalBasis: '(dx²-y², dxy)', irActive: false, ramanActive: true, description: 'Doubly degenerate δ-type equatorial representation.' },
+      { symbol: 'A1\'\'', id: 'A1pp', dimension: 1, characters: [1, 1, 1, 1, -1, -1, -1, -1], linearFunctions: [], quadraticFunctions: [], orbitalBasis: '', irActive: false, ramanActive: false, description: 'Antisymmetric under σh and σv.' },
+      { symbol: 'A2\'\'', id: 'A2pp', dimension: 1, characters: [1, 1, 1, -1, -1, -1, -1, 1], linearFunctions: ['z'], quadraticFunctions: [], orbitalBasis: 'pz (lowest Cp π)', irActive: true, ramanActive: false, description: 'Out-of-plane totally symmetric π orbital.' },
+      { symbol: 'E1\'\'', id: 'E1pp', dimension: 2, characters: [2, 0.618, -1.618, 0, -2, -0.618, 1.618, 0], linearFunctions: ['(Rx, Ry)'], quadraticFunctions: ['(xz, yz)'], orbitalBasis: '(dxz, dyz) (Cp π HOMO)', irActive: false, ramanActive: true, description: 'Doubly degenerate out-of-plane π bonding orbital.' },
+      { symbol: 'E2\'\'', id: 'E2pp', dimension: 2, characters: [2, -1.618, 0.618, 0, -2, 1.618, -0.618, 0], linearFunctions: [], quadraticFunctions: [], orbitalBasis: 'Cp π* LUMO', irActive: false, ramanActive: false, description: 'Doubly degenerate out-of-plane π* antibonding orbital.' },
+    ],
+    elements3D: [
+      { id: 'c5_z', type: 'axis', label: 'C5 (z-axis)', schoenflies: 'C5', fold: 5, axis: [0, 0, 1], color: '#2563EB', description: 'Principal 5-fold rotation axis' },
+      { id: 'sigma_h', type: 'plane', label: 'σh (Equatorial Plane)', schoenflies: 'σh', axis: [0, 0, 1], color: '#D97706', description: 'Horizontal mirror plane' },
+      { id: 'sigma_v', type: 'plane', label: 'σv (Vertical Plane)', schoenflies: 'σv', axis: [1, 0, 0], color: '#0D9488', description: 'Vertical mirror plane' },
+    ],
+    defaultReduciblePresets: [
+      { id: 'cp_pi', label: 'Γ_π (Cyclopentadienyl 5 pz AOs)', characters: [5, 0, 0, -1, -5, 0, 0, 1], description: 'Decomposes into A2\'\' + E1\'\' + E2\'\'' },
+    ],
+  },
+
+  S4: {
+    id: 'S4',
+    schoenflies: 'S4',
+    name: '4-Fold Improper Rotational',
+    order: 4,
+    family: 'Sn (Improper Axial)',
+    description: 'Contains an improper 4-fold rotation-reflection axis S4 (which generates C2 = S4²), without mirror planes or inversion. Achiral despite lacking σ and i. Example: 1,3,5,7-tetrafluorocyclooctatetraene.',
+    classes: [
+      { id: 'E', symbol: 'E', operationType: 'E', count: 1, description: 'Identity operation' },
+      { id: '2S4', symbol: '2S4', operationType: 'Sn', count: 2, description: '±90° improper rotations' },
+      { id: 'C2', symbol: 'C2', operationType: 'Cn', count: 1, description: '180° rotation (= S4²)' },
+    ],
+    irreps: [
+      { symbol: 'A', id: 'A', dimension: 1, characters: [1, 1, 1], linearFunctions: ['Rz'], quadraticFunctions: ['x²+y²', 'z²'], orbitalBasis: 's, dz²', irActive: false, ramanActive: true, description: 'Totally symmetric representation.' },
+      { symbol: 'B', id: 'B', dimension: 1, characters: [1, -1, 1], linearFunctions: ['z'], quadraticFunctions: ['x²-y²', 'xy'], orbitalBasis: 'pz, dx²-y², dxy', irActive: true, ramanActive: true, description: 'Antisymmetric under S4, symmetric under C2.' },
+      { symbol: 'E', id: 'E', dimension: 2, characters: [2, 0, -2], linearFunctions: ['(x, y)', '(Rx, Ry)'], quadraticFunctions: ['(xz, yz)'], orbitalBasis: '(px, py), (dxz, dyz)', irActive: true, ramanActive: true, description: 'Doubly degenerate representation.' },
+    ],
+    elements3D: [
+      { id: 's4_z', type: 'axis', label: 'S4 / C2 (z-axis)', schoenflies: 'S4', fold: 4, axis: [0, 0, 1], color: '#2563EB', description: 'Principal 4-fold improper rotation axis' },
+    ],
+    defaultReduciblePresets: [
+      { id: 's4_four', label: 'Γ_4 (4 S4-Related Substituents)', characters: [4, 0, 0], description: 'Decomposes into A + B + E' },
+    ],
+  },
+
+  Th: {
+    id: 'Th',
+    schoenflies: 'Th',
+    name: 'Pyritohedral (Centrosymmetric Tetrahedral)',
+    order: 24,
+    family: 'Cubic / Polyhedral',
+    description: 'Combines tetrahedral rotational symmetry T with an inversion center i and three orthogonal mirror planes σh. Classic examples: [Fe(H2O)6]2+ (oriented ligands), [Co(NO2)6]3-.',
+    classes: [
+      { id: 'E', symbol: 'E', operationType: 'E', count: 1, description: 'Identity operation' },
+      { id: '8C3', symbol: '8C3', operationType: 'Cn', count: 8, description: 'Eight 3-fold body-diagonal rotations' },
+      { id: '3C2', symbol: '3C2', operationType: 'Cn', count: 3, description: 'Three orthogonal C2 axes' },
+      { id: 'i', symbol: 'i', operationType: 'i', count: 1, description: 'Inversion center' },
+      { id: '8S6', symbol: '8S6', operationType: 'Sn', count: 8, description: 'Eight 6-fold improper rotations' },
+      { id: '3sigma_h', symbol: '3σh', operationType: 'sigma_h', count: 3, description: 'Three orthogonal Cartesian mirror planes' },
+    ],
+    irreps: [
+      { symbol: 'Ag', id: 'Ag', dimension: 1, characters: [1, 1, 1, 1, 1, 1], linearFunctions: [], quadraticFunctions: ['x²+y²+z²'], orbitalBasis: 's', irActive: false, ramanActive: true, description: 'Totally symmetric gerade representation.' },
+      { symbol: 'Eg', id: 'Eg', dimension: 2, characters: [2, -1, 2, 2, -1, 2], linearFunctions: [], quadraticFunctions: ['(2z²-x²-y², x²-y²)'], orbitalBasis: '(dz², dx²-y²)', irActive: false, ramanActive: true, description: 'Doubly degenerate gerade eg d-orbitals.' },
+      { symbol: 'Tg', id: 'Tg', dimension: 3, characters: [3, 0, -1, 3, 0, -1], linearFunctions: ['(Rx, Ry, Rz)'], quadraticFunctions: ['(xy, xz, yz)'], orbitalBasis: '(dxy, dxz, dyz)', irActive: false, ramanActive: true, description: 'Triply degenerate gerade t2g-like d-orbitals.' },
+      { symbol: 'Au', id: 'Au', dimension: 1, characters: [1, 1, 1, -1, -1, -1], linearFunctions: [], quadraticFunctions: [], orbitalBasis: 'fxyz', irActive: false, ramanActive: false, description: 'Singly degenerate ungerade representation.' },
+      { symbol: 'Eu', id: 'Eu', dimension: 2, characters: [2, -1, 2, -2, 1, -2], linearFunctions: [], quadraticFunctions: [], orbitalBasis: '', irActive: false, ramanActive: false, description: 'Doubly degenerate ungerade representation.' },
+      { symbol: 'Tu', id: 'Tu', dimension: 3, characters: [3, 0, -1, -3, 0, 1], linearFunctions: ['(x, y, z)'], quadraticFunctions: [], orbitalBasis: '(px, py, pz)', irActive: true, ramanActive: false, description: 'Triply degenerate IR-active ungerade representation.' },
+    ],
+    elements3D: [
+      { id: 'c2_z', type: 'axis', label: 'C2(z)', schoenflies: 'C2', fold: 2, axis: [0, 0, 1], color: '#2563EB', description: 'Cartesian C2 axis' },
+      { id: 'c3_1', type: 'axis', label: 'C3 (1,1,1)', schoenflies: 'C3', fold: 3, axis: [0.577, 0.577, 0.577], color: '#0284C7', description: 'Body-diagonal C3 axis' },
+      { id: 'sigma_h', type: 'plane', label: 'σh(xy)', schoenflies: 'σh', axis: [0, 0, 1], color: '#0D9488', description: 'Cartesian mirror plane' },
+      { id: 'inv', type: 'center', label: 'Inversion Center i', schoenflies: 'i', color: '#DC2626', description: 'Center of inversion' },
+    ],
+    defaultReduciblePresets: [
+      { id: 'th_6', label: 'Γ_σ (6 Octahedral Metal–Ligand Bonds)', characters: [6, 0, 2, 0, 0, 4], description: 'Decomposes into Ag + Eg + Tu' },
+    ],
+  },
+
+  Ih: {
+    id: 'Ih',
+    schoenflies: 'Ih',
+    name: 'Icosahedral (Centrosymmetric)',
+    order: 120,
+    family: 'Cubic / Polyhedral',
+    description: 'Highest finite molecular point group (order h = 120): six C5 axes, ten C3 axes, fifteen C2 axes, inversion i, and fifteen mirror planes. Classic examples: C60 buckminsterfullerene, [B12H12]2-.',
+    classes: [
+      { id: 'E', symbol: 'E', operationType: 'E', count: 1, description: 'Identity operation' },
+      { id: '12C5', symbol: '12C5', operationType: 'Cn', count: 12, description: 'Twelve ±72° rotations around 6 C5 axes' },
+      { id: '12C52', symbol: '12C5²', operationType: 'Cn', count: 12, description: 'Twelve ±144° rotations around 6 C5 axes' },
+      { id: '20C3', symbol: '20C3', operationType: 'Cn', count: 20, description: 'Twenty ±120° rotations' },
+      { id: '15C2', symbol: '15C2', operationType: 'Cn', count: 15, description: 'Fifteen 180° rotations' },
+      { id: 'i', symbol: 'i', operationType: 'i', count: 1, description: 'Inversion center' },
+      { id: '12S10', symbol: '12S10', operationType: 'Sn', count: 12, description: 'Twelve improper S10 rotations' },
+      { id: '12S103', symbol: '12S10³', operationType: 'Sn', count: 12, description: 'Twelve improper S10³ rotations' },
+      { id: '20S6', symbol: '20S6', operationType: 'Sn', count: 20, description: 'Twenty improper S6 rotations' },
+      { id: '15sigma', symbol: '15σ', operationType: 'sigma_v', count: 15, description: 'Fifteen mirror planes' },
+    ],
+    irreps: [
+      { symbol: 'Ag', id: 'Ag', dimension: 1, characters: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1], linearFunctions: [], quadraticFunctions: ['x²+y²+z²'], orbitalBasis: 's', irActive: false, ramanActive: true, description: 'Totally symmetric icosahedral representation.' },
+      { symbol: 'T1g', id: 'T1g', dimension: 3, characters: [3, 1.618, -0.618, 0, -1, 3, -0.618, 1.618, 0, -1], linearFunctions: ['(Rx, Ry, Rz)'], quadraticFunctions: [], orbitalBasis: 'Rotations', irActive: false, ramanActive: false, description: 'Triply degenerate gerade representation.' },
+      { symbol: 'T2g', id: 'T2g', dimension: 3, characters: [3, -0.618, 1.618, 0, -1, 3, 1.618, -0.618, 0, -1], linearFunctions: [], quadraticFunctions: [], orbitalBasis: '', irActive: false, ramanActive: false, description: 'Triply degenerate gerade representation.' },
+      { symbol: 'Gg', id: 'Gg', dimension: 4, characters: [4, -1, -1, 1, 0, 4, -1, -1, 1, 0], linearFunctions: [], quadraticFunctions: [], orbitalBasis: '', irActive: false, ramanActive: false, description: 'Four-fold degenerate gerade representation.' },
+      { symbol: 'Hg', id: 'Hg', dimension: 5, characters: [5, 0, 0, -1, 1, 5, 0, 0, -1, 1], linearFunctions: [], quadraticFunctions: ['(2z²-x²-y², x²-y², xy, xz, yz)'], orbitalBasis: 'All five d-orbitals (C60 hu/hg)', irActive: false, ramanActive: true, description: 'Five-fold degenerate gerade representation spanning all five d-orbitals.' },
+      { symbol: 'Au', id: 'Au', dimension: 1, characters: [1, 1, 1, 1, 1, -1, -1, -1, -1, -1], linearFunctions: [], quadraticFunctions: [], orbitalBasis: '', irActive: false, ramanActive: false, description: 'Singly degenerate ungerade representation.' },
+      { symbol: 'T1u', id: 'T1u', dimension: 3, characters: [3, 1.618, -0.618, 0, -1, -3, 0.618, -1.618, 0, 1], linearFunctions: ['(x, y, z)'], quadraticFunctions: [], orbitalBasis: '(px, py, pz) (C60 t1u LUMO)', irActive: true, ramanActive: false, description: 'Triply degenerate IR-active representation (C60 LUMO).' },
+      { symbol: 'T2u', id: 'T2u', dimension: 3, characters: [3, -0.618, 1.618, 0, -1, -3, -1.618, 0.618, 0, 1], linearFunctions: [], quadraticFunctions: [], orbitalBasis: 'f-orbitals', irActive: false, ramanActive: false, description: 'Triply degenerate ungerade f-orbital representation.' },
+      { symbol: 'Gu', id: 'Gu', dimension: 4, characters: [4, -1, -1, 1, 0, -4, 1, 1, -1, 0], linearFunctions: [], quadraticFunctions: [], orbitalBasis: 'f-orbitals', irActive: false, ramanActive: false, description: 'Four-fold degenerate ungerade representation.' },
+      { symbol: 'Hu', id: 'Hu', dimension: 5, characters: [5, 0, 0, -1, 1, -5, 0, 0, 1, -1], linearFunctions: [], quadraticFunctions: [], orbitalBasis: 'C60 hu HOMO', irActive: false, ramanActive: false, description: 'Five-fold degenerate ungerade representation (HOMO of C60).' },
+    ],
+    elements3D: [
+      { id: 'c5_1', type: 'axis', label: 'C5 (Icosahedral)', schoenflies: 'C5', fold: 5, axis: [0, 0.5257, 0.8507], color: '#2563EB', description: '5-fold icosahedral axis' },
+      { id: 'c3_1', type: 'axis', label: 'C3 (Icosahedral)', schoenflies: 'C3', fold: 3, axis: [0.577, 0.577, 0.577], color: '#0284C7', description: '3-fold icosahedral axis' },
+      { id: 'inv', type: 'center', label: 'Inversion Center i', schoenflies: 'i', color: '#DC2626', description: 'Center of inversion' },
+    ],
+    defaultReduciblePresets: [
+      { id: 'ih_12', label: 'Γ_12 (12 Vertices of Icosahedron [B12H12]2-)', characters: [12, 2, 2, 0, 0, 0, 0, 0, 0, 4], description: 'Decomposes into Ag + T1u + Hg + T2u' },
+    ],
+  },
 };
 
 /**

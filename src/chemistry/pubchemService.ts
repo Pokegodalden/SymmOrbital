@@ -178,6 +178,13 @@ const AMBIGUOUS_FORMULA_QUERY_MAP: Record<string, string> = {
   'bis(benzene)chromium': 'bis(benzene)chromium',
   'bis(benzene)chromium(0)': 'bis(benzene)chromium',
   '(c6h6)cr(co)3': '(benzene)chromium tricarbonyl',
+  'fe(cp)2': 'ferrocene',
+  'cp2fe': 'ferrocene',
+  'fe(c5h5)2': 'ferrocene',
+  'fe(cp*)2': 'decamethylferrocene',
+  'cp2ticl2': 'titanocene dichloride',
+  'cp2zrcl2': 'zirconocene dichloride',
+  manganocene: '49822762',
 };
 
 /**
@@ -191,6 +198,7 @@ export function parseSdfToGraph(
   atoms: AtomNode[];
   bonds: BondEdge[];
   meanBondLengthAngstrom?: number;
+  normalizedChargeDelta?: number;
 } {
   const lines = sdfText.split(/\r?\n/);
   const countsLineIdx = lines.findIndex((l) => l.includes('V2000'));
@@ -293,11 +301,34 @@ export function parseSdfToGraph(
     }
   }
 
+  // Parse MDL V2000 M  CHG formal charge lines (e.g. M  CHG  3   1   2   2  -1   3  -1)
+  for (let i = countsLineIdx + numAtoms + numBonds + 1; i < lines.length; i++) {
+    const line = lines[i];
+    if (!line || line.startsWith('M  END')) break;
+    if (line.startsWith('M  CHG')) {
+      const tokens = line.slice(6).trim().split(/\s+/).map((t) => parseInt(t, 10));
+      const count = tokens[0] || 0;
+      for (let k = 0; k < count; k++) {
+        const atomIdx = (tokens[1 + k * 2] || 0) - 1;
+        const chg = tokens[2 + k * 2] || 0;
+        if (rawAtoms[atomIdx] && !Number.isNaN(chg) && chg !== 0) {
+          rawAtoms[atomIdx].formalCharge = chg;
+        }
+      }
+    }
+  }
+
+  const preResolveChargeSum = rawAtoms.reduce((s, a) => s + (a.formalCharge ?? 0), 0);
+
   // Reconstruct missing metal-ligand coordinate covalent bonds (e.g. Fe-C in hexacyanoferrate [Fe(CN)6]4-,
-  // Cr-C in Cr(CO)6, Fe-C in Fe(CO)5, Ni-C in [Ni(CN)4]2-, Pt-Cl in [PtCl6]2-) and strip spectator alkali counterions
+  // Cr-C in Cr(CO)6, Fe-C in Fe(CO)5, Ni-C in [Ni(CN)4]2-, Pt-Cl in [PtCl6]2-, η⁵-Cp in metallocenes)
+  // and strip spectator alkali counterions
   const coordResolved = resolveCoordinationBonds(rawAtoms, rawBonds, true);
   const resolvedAtoms = coordResolved.atoms;
   const resolvedBonds = coordResolved.bonds;
+  const postResolveChargeSum = resolvedAtoms.reduce((s, a) => s + (a.formalCharge ?? 0), 0);
+  // Track bogus charge delta removed when PubChem encodes neutral η⁶-benzene ligands as [CH-]6 / [CH+]6
+  const normalizedChargeDelta = postResolveChargeSum - preResolveChargeSum;
 
   const meanBondLengthAngstrom =
     bondLengthCount > 0 ? Number((bondLengthSum / bondLengthCount).toFixed(3)) : undefined;
@@ -330,10 +361,10 @@ export function parseSdfToGraph(
         keepIds.has(b.target) &&
         (heavyIds.has(b.source) || heavyIds.has(b.target))
     );
-    return { atoms: keptAtoms, bonds: filteredBonds, meanBondLengthAngstrom };
+    return { atoms: keptAtoms, bonds: filteredBonds, meanBondLengthAngstrom, normalizedChargeDelta };
   }
 
-  return { atoms: resolvedAtoms, bonds: resolvedBonds, meanBondLengthAngstrom };
+  return { atoms: resolvedAtoms, bonds: resolvedBonds, meanBondLengthAngstrom, normalizedChargeDelta };
 }
 
 /**
@@ -444,7 +475,17 @@ export async function lookupPubChemCompound(query: string): Promise<PubChemCompo
 
   const parsedSdf = sdfText
     ? parseSdfToGraph(sdfText, prop.MolecularFormula || '')
-    : { atoms: [], bonds: [], meanBondLengthAngstrom: undefined };
+    : { atoms: [], bonds: [], meanBondLengthAngstrom: undefined, normalizedChargeDelta: 0 };
+
+  const rawPubChemCharge = prop.Charge !== undefined ? Number(prop.Charge) : 0;
+  // Reconcile bogus PubChem ±6/±12 standardization charges on neutral η⁶-arene complexes
+  // (e.g. Bis(benzene)chromium CID 11984611 q=-6, Benchrotrene CID 11986141 q=+6)
+  const resolvedCharge =
+    Math.abs(rawPubChemCharge) >= 6 &&
+    parsedSdf.normalizedChargeDelta &&
+    Math.sign(rawPubChemCharge) === -Math.sign(parsedSdf.normalizedChargeDelta)
+      ? rawPubChemCharge + parsedSdf.normalizedChargeDelta
+      : rawPubChemCharge;
 
   return {
     cid,
@@ -456,7 +497,7 @@ export async function lookupPubChemCompound(query: string): Promise<PubChemCompo
     inchikey: prop.InChIKey || '',
     xlogp: prop.XLogP !== undefined ? Number(prop.XLogP) : undefined,
     tpsa: prop.TPSA !== undefined ? Number(prop.TPSA) : undefined,
-    charge: prop.Charge !== undefined ? Number(prop.Charge) : 0,
+    charge: resolvedCharge,
     hBondDonorCount: prop.HBondDonorCount !== undefined ? Number(prop.HBondDonorCount) : undefined,
     hBondAcceptorCount: prop.HBondAcceptorCount !== undefined ? Number(prop.HBondAcceptorCount) : undefined,
     rotatableBondCount: prop.RotatableBondCount !== undefined ? Number(prop.RotatableBondCount) : undefined,

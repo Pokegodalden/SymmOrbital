@@ -6,6 +6,7 @@ import {
 } from '../chemistry/moleculesData';
 import {
   computeMolecularFormula,
+  detectHapticRingCoordinations,
   generateSmilesFromGraph,
 } from '../chemistry/moEngine';
 import { formulaToLatex } from '../chemistry/latexUtils';
@@ -569,6 +570,13 @@ export const ChemicalSketcher2D: React.FC<ChemicalSketcher2DProps> = ({
 
   const formulaInfo = computeMolecularFormula(atoms, bonds, true);
   const currentSmiles = generateSmilesFromGraph(atoms, bonds);
+  const hapticRings = detectHapticRingCoordinations(atoms, bonds);
+  const hapticMetalBondIds = new Set<string>();
+  const hapticRingPerimeterBondIds = new Set<string>();
+  for (const hg of hapticRings) {
+    hg.metalCarbonBondIds.forEach((id) => hapticMetalBondIds.add(id));
+    hg.ringPerimeterBondIds.forEach((id) => hapticRingPerimeterBondIds.add(id));
+  }
 
   return (
     <div className="bg-white border border-slate-200 rounded-lg flex flex-col overflow-hidden h-full">
@@ -911,11 +919,15 @@ export const ChemicalSketcher2D: React.FC<ChemicalSketcher2DProps> = ({
             strokeWidth="1"
           />
 
-          {/* Render Bonds */}
+          {/* Render Bonds (skip individual M-C spokes of η⁴/η⁵/η⁶ haptic rings; drawn cleanly as centroid coordination below) */}
           {bonds.map((bond) => {
+            if (hapticMetalBondIds.has(bond.id)) return null;
             const s = atoms.find((a) => a.id === bond.source);
             const t = atoms.find((a) => a.id === bond.target);
             if (!s || !t) return null;
+
+            const isHapticPerimeter = hapticRingPerimeterBondIds.has(bond.id);
+            const effectiveOrder: 1 | 2 | 3 = isHapticPerimeter ? 1 : bond.order;
 
             const x1 = toScreenX(s.x2d);
             const y1 = toScreenY(s.y2d);
@@ -951,7 +963,7 @@ export const ChemicalSketcher2D: React.FC<ChemicalSketcher2DProps> = ({
                   strokeWidth="14"
                 />
 
-                {bond.order === 1 && (!bond.stereo || bond.stereo === 'none') && (
+                {effectiveOrder === 1 && (!bond.stereo || bond.stereo === 'none') && (
                   <line
                     x1={x1}
                     y1={y1}
@@ -963,14 +975,14 @@ export const ChemicalSketcher2D: React.FC<ChemicalSketcher2DProps> = ({
                   />
                 )}
 
-                {bond.order === 1 && bond.stereo === 'wedge' && (
+                {effectiveOrder === 1 && bond.stereo === 'wedge' && (
                   <polygon
                     points={`${x1},${y1} ${x2 + nx * 5},${y2 + ny * 5} ${x2 - nx * 5},${y2 - ny * 5}`}
                     fill={strokeColor}
                   />
                 )}
 
-                {bond.order === 1 && bond.stereo === 'dash' && (
+                {effectiveOrder === 1 && bond.stereo === 'dash' && (
                   <line
                     x1={x1}
                     y1={y1}
@@ -982,7 +994,7 @@ export const ChemicalSketcher2D: React.FC<ChemicalSketcher2DProps> = ({
                   />
                 )}
 
-                {bond.order === 1 && bond.stereo === 'wavy' && (
+                {effectiveOrder === 1 && bond.stereo === 'wavy' && (
                   <path
                     d={(() => {
                       const steps = 8;
@@ -1001,7 +1013,7 @@ export const ChemicalSketcher2D: React.FC<ChemicalSketcher2DProps> = ({
                   />
                 )}
 
-                {bond.order === 2 && bond.stereo === 'crossed' && (
+                {effectiveOrder === 2 && bond.stereo === 'crossed' && (
                   <>
                     <line
                       x1={x1 + nx * 3.2}
@@ -1024,7 +1036,7 @@ export const ChemicalSketcher2D: React.FC<ChemicalSketcher2DProps> = ({
                   </>
                 )}
 
-                {bond.order === 2 && bond.stereo !== 'crossed' && (
+                {effectiveOrder === 2 && bond.stereo !== 'crossed' && (
                   <>
                     <line
                       x1={x1 + nx * 3.2}
@@ -1047,7 +1059,7 @@ export const ChemicalSketcher2D: React.FC<ChemicalSketcher2DProps> = ({
                   </>
                 )}
 
-                {bond.order === 3 && (
+                {effectiveOrder === 3 && (
                   <>
                     <line
                       x1={x1}
@@ -1078,6 +1090,55 @@ export const ChemicalSketcher2D: React.FC<ChemicalSketcher2DProps> = ({
                     />
                   </>
                 )}
+              </g>
+            );
+          })}
+
+          {/* Render IUPAC Haptic η⁴/η⁵/η⁶ Aromatic Ring Circles & Metal-Centroid Coordination Bonds */}
+          {hapticRings.map((hg, hgIdx) => {
+            const metal = atoms.find((a) => a.id === hg.metalId);
+            const ringAtoms = hg.ringCarbonIds
+              .map((id) => atoms.find((a) => a.id === id))
+              .filter((a): a is AtomNode => Boolean(a));
+            if (!metal || ringAtoms.length < 4) return null;
+
+            const mx = toScreenX(metal.x2d);
+            const my = toScreenY(metal.y2d);
+            const rcx =
+              ringAtoms.reduce((s, a) => s + toScreenX(a.x2d), 0) / ringAtoms.length;
+            const rcy =
+              ringAtoms.reduce((s, a) => s + toScreenY(a.y2d), 0) / ringAtoms.length;
+            const avgScreenR =
+              ringAtoms.reduce((s, a) => s + Math.hypot(toScreenX(a.x2d) - rcx, toScreenY(a.y2d) - rcy), 0) /
+              ringAtoms.length;
+            const innerR = Math.max(6, avgScreenR * 0.54);
+
+            return (
+              <g
+                key={`haptic_${hg.metalId}_${hgIdx}`}
+                data-testid={`haptic-ring-2d-${hgIdx}`}
+                className="pointer-events-none"
+              >
+                <title>{`η${hg.hapticity} haptic coordination (${metal.element}–ring centroid)`}</title>
+                <circle
+                  cx={rcx}
+                  cy={rcy}
+                  r={innerR}
+                  fill="rgba(37, 99, 235, 0.05)"
+                  stroke="#334155"
+                  strokeWidth={isCompactMacroView ? 1.3 : 1.7}
+                />
+                <line
+                  x1={mx}
+                  y1={my}
+                  x2={rcx}
+                  y2={rcy}
+                  stroke="#334155"
+                  strokeWidth={isCompactMacroView ? 1.8 : 2.2}
+                  strokeDasharray="4.5 3"
+                  strokeLinecap="round"
+                />
+                <circle cx={rcx} cy={rcy} r={isCompactMacroView ? 2.0 : 2.6} fill="#334155" />
               </g>
             );
           })}
@@ -1217,7 +1278,7 @@ export const ChemicalSketcher2D: React.FC<ChemicalSketcher2DProps> = ({
         </svg>
 
         {/* Floating 2D Zoom & Auto-Fit Controls for Large Molecules */}
-        <div className="absolute top-2.5 right-2.5 flex items-center gap-1 bg-white/90 border border-slate-200 rounded px-1.5 py-0.5 text-[10px] font-mono text-slate-600 shadow-2xs">
+        <div className="absolute top-2.5 right-2.5 flex items-center gap-1 bg-white border border-slate-200 rounded px-1.5 py-0.5 text-[10px] font-mono text-slate-600 shadow-2xs">
           <span>{Math.round((SCALE / BASE_SCALE) * 100)}%</span>
           <button
             type="button"

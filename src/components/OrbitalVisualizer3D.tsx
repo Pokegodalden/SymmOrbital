@@ -7,7 +7,10 @@ import {
   MolecularOrbital,
   MoleculeEntry,
 } from '../chemistry/moleculesData';
-import { evaluateOrbitalWavefunction } from '../chemistry/moEngine';
+import {
+  detectHapticRingCoordinations,
+  evaluateOrbitalWavefunction,
+} from '../chemistry/moEngine';
 import { buildMorphIsosurfaceKeyframe } from '../chemistry/moIsosurface';
 import { PointGroupData } from '../chemistry/symmetryData';
 import {
@@ -558,14 +561,39 @@ export const OrbitalVisualizer3D: React.FC<OrbitalVisualizer3DProps> = ({
       scene.background = new THREE.Color(bgHex);
       scene.fog = new THREE.FogExp2(bgHex, Math.min(0.032, 0.18 / currentCamDist));
 
-      const molKey = `${mol.id}_${mol.atoms.length}`;
+      const hapticRings = detectHapticRingCoordinations(mol.atoms, mol.bonds);
+      const isZAlignedSandwich =
+        hapticRings.length > 0 &&
+        hapticRings.every((hg) => {
+          const metal = mol.atoms.find((a) => a.id === hg.metalId);
+          const ringCs = hg.ringCarbonIds
+            .map((id) => mol.atoms.find((a) => a.id === id))
+            .filter((a): a is NonNullable<typeof a> => Boolean(a));
+          if (!metal || ringCs.length < 4) return false;
+          const rcx = ringCs.reduce((s, a) => s + a.x3d, 0) / ringCs.length;
+          const rcy = ringCs.reduce((s, a) => s + a.y3d, 0) / ringCs.length;
+          const rcz = ringCs.reduce((s, a) => s + a.z3d, 0) / ringCs.length;
+          const dz = Math.abs(rcz - metal.z3d);
+          const dAll = Math.hypot(rcx - metal.x3d, rcy - metal.y3d, dz) || 1;
+          return dz / dAll > 0.85;
+        });
+
+      const molKey = `${mol.id}|${mol.formula}|${mol.atoms.length}`;
       if (molKey !== lastFramedMoleculeId) {
         lastFramedMoleculeId = molKey;
-        camera.position.set(
-          currentCamDist * 0.28,
-          currentCamDist * 0.30,
-          currentCamDist * 0.95
-        );
+        if (isZAlignedSandwich) {
+          camera.position.set(
+            currentCamDist * 0.82,
+            currentCamDist * 0.35,
+            currentCamDist * 0.45
+          );
+        } else {
+          camera.position.set(
+            currentCamDist * 0.28,
+            currentCamDist * 0.30,
+            currentCamDist * 0.95
+          );
+        }
         controls.target.set(0, 0, 0);
         controls.update();
       }
@@ -613,7 +641,15 @@ export const OrbitalVisualizer3D: React.FC<OrbitalVisualizer3DProps> = ({
       const vDir = new THREE.Vector3();
       const vUp = new THREE.Vector3(0, 1, 0);
 
+      const hapticMetalBondIds = new Set<string>();
+      const hapticPerimeterBondIds = new Set<string>();
+      for (const hr of hapticRings) {
+        for (const id of hr.metalCarbonBondIds) hapticMetalBondIds.add(id);
+        for (const id of hr.ringPerimeterBondIds) hapticPerimeterBondIds.add(id);
+      }
+
       for (const bond of mol.bonds) {
+        if (hapticMetalBondIds.has(bond.id)) continue;
         const a1 = mol.atoms.find((a) => a.id === bond.source);
         const a2 = mol.atoms.find((a) => a.id === bond.target);
         if (!a1 || !a2) continue;
@@ -630,13 +666,14 @@ export const OrbitalVisualizer3D: React.FC<OrbitalVisualizer3DProps> = ({
           vDir.clone().normalize()
         );
 
+        const effectiveOrder = hapticPerimeterBondIds.has(bond.id) ? 1 : bond.order;
         const offsets =
-          bond.order === 1
+          effectiveOrder === 1
             ? [0]
-            : bond.order === 2
+            : effectiveOrder === 2
               ? [-0.09, 0.09]
               : [-0.12, 0, 0.12];
-        const cylRadius = bond.order === 1 ? 0.075 : 0.048;
+        const cylRadius = effectiveOrder === 1 ? 0.075 : 0.048;
 
         for (const off of offsets) {
           const bMesh = new THREE.Mesh(cylinderGeo, bondMat);
@@ -645,6 +682,74 @@ export const OrbitalVisualizer3D: React.FC<OrbitalVisualizer3DProps> = ({
           bMesh.position.z += off;
           bMesh.quaternion.copy(quat);
           bondGroup.add(bMesh);
+        }
+      }
+
+      if (hapticRings.length > 0) {
+        const hapticAxisMat = new THREE.MeshStandardMaterial({
+          color: isDark ? 0xf59e0b : 0xb45309,
+          roughness: 0.35,
+          metalness: 0.35,
+        });
+        const hapticTorusMat = new THREE.MeshStandardMaterial({
+          color: isDark ? 0xcbd5e1 : 0x334155,
+          roughness: 0.4,
+          metalness: 0.4,
+        });
+        for (const hr of hapticRings) {
+          const metal = mol.atoms.find((a) => a.id === hr.metalId);
+          const ringAtoms = hr.ringCarbonIds
+            .map((id) => mol.atoms.find((a) => a.id === id))
+            .filter((a): a is NonNullable<typeof a> => Boolean(a));
+          if (!metal || ringAtoms.length < 4) continue;
+
+          const centroid = new THREE.Vector3();
+          for (const ra of ringAtoms) centroid.add(new THREE.Vector3(ra.x3d, ra.y3d, ra.z3d));
+          centroid.divideScalar(ringAtoms.length);
+
+          const mPos = new THREE.Vector3(metal.x3d, metal.y3d, metal.z3d);
+          const axisVec = new THREE.Vector3().subVectors(centroid, mPos);
+          const axisLen = axisVec.length();
+          if (axisLen > 0.15) {
+            const axisDir = axisVec.clone().normalize();
+            const axisQuat = new THREE.Quaternion().setFromUnitVectors(vUp, axisDir);
+            const segments = 5;
+            for (let s = 0; s < segments; s++) {
+              const t0 = 0.12 + (s / segments) * 0.78;
+              const t1 = t0 + 0.095;
+              const segLen = (t1 - t0) * axisLen;
+              const segMid = mPos.clone().addScaledVector(axisVec, (t0 + t1) * 0.5);
+              const dashMesh = new THREE.Mesh(cylinderGeo, hapticAxisMat);
+              dashMesh.scale.set(0.042, segLen, 0.042);
+              dashMesh.position.copy(segMid);
+              dashMesh.quaternion.copy(axisQuat);
+              bondGroup.add(dashMesh);
+            }
+          }
+
+          let avgR = 0;
+          for (const ra of ringAtoms) {
+            avgR += centroid.distanceTo(new THREE.Vector3(ra.x3d, ra.y3d, ra.z3d));
+          }
+          avgR /= ringAtoms.length;
+          const vA = new THREE.Vector3(
+            ringAtoms[0].x3d - centroid.x,
+            ringAtoms[0].y3d - centroid.y,
+            ringAtoms[0].z3d - centroid.z
+          );
+          const vB = new THREE.Vector3(
+            ringAtoms[1].x3d - centroid.x,
+            ringAtoms[1].y3d - centroid.y,
+            ringAtoms[1].z3d - centroid.z
+          );
+          const normal = new THREE.Vector3().crossVectors(vA, vB).normalize();
+          if (normal.lengthSq() > 0.5 && avgR > 0.5) {
+            const torusGeo = new THREE.TorusGeometry(avgR * 0.62, 0.032, 10, 32);
+            const torusMesh = new THREE.Mesh(torusGeo, hapticTorusMat);
+            torusMesh.position.copy(centroid);
+            torusMesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), normal);
+            bondGroup.add(torusMesh);
+          }
         }
       }
       contentGroup.add(bondGroup);

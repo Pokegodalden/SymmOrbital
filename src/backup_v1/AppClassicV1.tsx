@@ -36,15 +36,23 @@ import { OrbitalVisualizer3D } from '../components/OrbitalVisualizer3D';
 import { SymmetryGroupPanel } from '../components/SymmetryGroupPanel';
 import { DatabaseVerificationPanel } from '../components/DatabaseVerificationPanel';
 import { SymmOrbitalLogo } from '../components/SymmOrbitalLogo';
-import { ExternalLink, Layers, Moon, Search, Sun } from 'lucide-react';
+import {
+  AppVersion,
+  VersionSwitcherDropdown,
+} from '../components/VersionSwitcherDropdown';
+import { ExternalLink, Moon, Search, Sun } from 'lucide-react';
 
 interface AppClassicV1Props {
+  currentVersion?: AppVersion;
+  onSelectVersion?: (version: AppVersion) => void;
   onSwitchToProWorkbench?: () => void;
   darkMode?: boolean;
   onToggleDarkMode?: () => void;
 }
 
 export function AppClassicV1({
+  currentVersion = 'v1',
+  onSelectVersion,
   onSwitchToProWorkbench,
   darkMode = false,
   onToggleDarkMode,
@@ -225,17 +233,21 @@ export function AppClassicV1({
               )}
             </button>
           )}
-          {onSwitchToProWorkbench && (
+          {onSelectVersion ? (
+            <VersionSwitcherDropdown
+              currentVersion={currentVersion}
+              onSelectVersion={onSelectVersion}
+            />
+          ) : onSwitchToProWorkbench ? (
             <button
               type="button"
               onClick={onSwitchToProWorkbench}
               className="px-3 py-2 text-xs font-medium text-slate-700 bg-slate-100 border border-slate-300 rounded-lg hover:bg-slate-200 transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0"
               title="Switch to the Pro 3-Pane Synchronized Workbench Layout"
             >
-              <Layers className="w-3.5 h-3.5 text-blue-600" />
               <span>Switch to Pro Workbench (v2)</span>
             </button>
-          )}
+          ) : null}
           <button
             type="button"
             onClick={() => handleSelectPresetMolecule(defaultWater)}
