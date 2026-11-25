@@ -124,6 +124,7 @@ export const OrbitalVisualizer3DV3: React.FC<OrbitalVisualizer3DV3Props> = ({
   const [lobeScale, setLobeScale] = useState<number>(1.0);
   const [orbitalOpacity, setOrbitalOpacity] = useState<number>(0.72);
   const [renderMode, setRenderMode] = useState<'merged' | 'wireframe'>('merged');
+  const [showLcaoLobes, setShowLcaoLobes] = useState<boolean>(false);
   const [morphProgress, setMorphProgress] = useState<number>(1.0);
   const [isMorphPlaying, setIsMorphPlaying] = useState<boolean>(false);
   const [showSymmetryElements, setShowSymmetryElements] = useState<boolean>(true);
@@ -205,6 +206,7 @@ export const OrbitalVisualizer3DV3: React.FC<OrbitalVisualizer3DV3Props> = ({
     lobeScale,
     orbitalOpacity,
     renderMode,
+    showLcaoLobes,
     morphProgress,
     showSymmetryElements,
     showNodalPlanes,
@@ -229,6 +231,7 @@ export const OrbitalVisualizer3DV3: React.FC<OrbitalVisualizer3DV3Props> = ({
     lobeScale,
     orbitalOpacity,
     renderMode,
+    showLcaoLobes,
     morphProgress,
     showSymmetryElements,
     showNodalPlanes,
@@ -277,6 +280,7 @@ export const OrbitalVisualizer3DV3: React.FC<OrbitalVisualizer3DV3Props> = ({
 
   const handleTogglePlayMorph = () => {
     if (fieldMode !== 'mo') onChangeFieldMode('mo');
+    if (showLcaoLobes) setShowLcaoLobes(false);
     if (!isMorphPlaying) {
       const startVal = morphProgress >= 0.96 ? 0 : morphProgress;
       morphStartLinearRef.current =
@@ -298,6 +302,7 @@ export const OrbitalVisualizer3DV3: React.FC<OrbitalVisualizer3DV3Props> = ({
 
   const handleScrubMorph = (nextValue: number) => {
     setIsMorphPlaying(false);
+    if (showLcaoLobes) setShowLcaoLobes(false);
     stateRef.current.morphProgress = nextValue;
     updateMorphFastRef.current?.(nextValue);
     setMorphProgress(nextValue);
@@ -400,6 +405,24 @@ export const OrbitalVisualizer3DV3: React.FC<OrbitalVisualizer3DV3Props> = ({
     const contentGroup = new THREE.Group();
     scene.add(contentGroup);
 
+    // Shared geometries for discrete LCAO lobes mode (preserved across rebuilds, disposed on unmount)
+    const sharedUnitSphereGeo = new THREE.SphereGeometry(1, 26, 20);
+    const sharedLobeGeo = new THREE.SphereGeometry(0.65, 26, 20);
+    {
+      const posAttr = sharedLobeGeo.attributes.position;
+      const vTemp = new THREE.Vector3();
+      for (let i = 0; i < posAttr.count; i++) {
+        vTemp.fromBufferAttribute(posAttr, i);
+        const ny = (vTemp.y + 0.65) / 1.3;
+        const pinch = Math.pow(ny, 0.55) * 1.15;
+        vTemp.x *= pinch;
+        vTemp.z *= pinch;
+        vTemp.y = ny * 1.35;
+        posAttr.setXYZ(i, vTemp.x, vTemp.y, vTemp.z);
+      }
+      sharedLobeGeo.computeVertexNormals();
+    }
+
     const morphKeyframeCache = new Map<
       string,
       { posGeo: THREE.BufferGeometry; negGeo: THREE.BufferGeometry }
@@ -487,8 +510,14 @@ export const OrbitalVisualizer3DV3: React.FC<OrbitalVisualizer3DV3Props> = ({
 
     const updateMorphFast = (tProgress: number) => {
       if (!activePosMesh || !activeNegMesh) return;
-      const { selectedMo: mo, atoms: atomList, lobeScale: scaleMult, fieldMode: fm } = stateRef.current;
-      if (!mo || fm !== 'mo') return;
+      const {
+        selectedMo: mo,
+        atoms: atomList,
+        lobeScale: scaleMult,
+        fieldMode: fm,
+        showLcaoLobes: lobesOn,
+      } = stateRef.current;
+      if (!mo || fm !== 'mo' || lobesOn) return;
       const kf = getMorphKeyframe(mo, atomList, scaleMult, tProgress);
       activePosMesh.geometry = kf.posGeo;
       activeNegMesh.geometry = kf.negGeo;
@@ -497,7 +526,10 @@ export const OrbitalVisualizer3DV3: React.FC<OrbitalVisualizer3DV3Props> = ({
     updateMorphFastRef.current = updateMorphFast;
 
     const disposeContentGroup = () => {
-      const cachedGeos = new Set<THREE.BufferGeometry>();
+      const cachedGeos = new Set<THREE.BufferGeometry>([
+        sharedUnitSphereGeo,
+        sharedLobeGeo,
+      ]);
       for (const e of morphKeyframeCache.values()) {
         cachedGeos.add(e.posGeo);
         cachedGeos.add(e.negGeo);
@@ -538,6 +570,7 @@ export const OrbitalVisualizer3DV3: React.FC<OrbitalVisualizer3DV3Props> = ({
         lobeScale: scaleMult,
         orbitalOpacity: opacityVal,
         renderMode: mode,
+        showLcaoLobes: lobesOn,
         morphProgress: tProgress,
         showSymmetryElements: showSym,
         showNodalPlanes: showNodes,
@@ -748,11 +781,15 @@ export const OrbitalVisualizer3DV3: React.FC<OrbitalVisualizer3DV3Props> = ({
         setSpinEmptyState(false);
         setMepRange(null);
 
+        const posEmissive = cbMode ? 0x0369a1 : 0x1d4ed8;
+        const negEmissive = cbMode ? 0xc2410c : 0xbe123c;
         const posMat = new THREE.MeshPhysicalMaterial({
           color: posHex,
+          emissive: posEmissive,
+          emissiveIntensity: lobesOn ? 0.2 : 0.08,
           roughness: 0.24,
           metalness: 0.02,
-          clearcoat: 0.25,
+          clearcoat: isSoftwareGl ? 0 : 0.3,
           transparent: true,
           opacity: opacityVal,
           wireframe: mode === 'wireframe',
@@ -761,9 +798,11 @@ export const OrbitalVisualizer3DV3: React.FC<OrbitalVisualizer3DV3Props> = ({
         });
         const negMat = new THREE.MeshPhysicalMaterial({
           color: negHex,
+          emissive: negEmissive,
+          emissiveIntensity: lobesOn ? 0.2 : 0.08,
           roughness: 0.24,
           metalness: 0.02,
-          clearcoat: 0.25,
+          clearcoat: isSoftwareGl ? 0 : 0.3,
           transparent: true,
           opacity: opacityVal,
           wireframe: mode === 'wireframe',
@@ -771,14 +810,176 @@ export const OrbitalVisualizer3DV3: React.FC<OrbitalVisualizer3DV3Props> = ({
           depthWrite: false,
         });
 
-        const kf = getMorphKeyframe(mo, atomList, scaleMult, tProgress);
-        const posMesh = new THREE.Mesh(kf.posGeo, posMat);
-        posMesh.renderOrder = 3;
-        const negMesh = new THREE.Mesh(kf.negGeo, negMat);
-        negMesh.renderOrder = 3;
-        activePosMesh = posMesh;
-        activeNegMesh = negMesh;
-        contentGroup.add(posMesh, negMesh);
+        if (lobesOn) {
+          const lobeGroup = new THREE.Group();
+          const isDelocalized = mo.lcao.length > 10;
+          const delocBoost = isDelocalized ? 1.28 : 1.0;
+
+          for (const term of mo.lcao) {
+            const atom = atomMap.get(term.atomId);
+            if (!atom || Math.abs(term.coeff) < 0.04) continue;
+
+            const weight =
+              Math.pow(Math.abs(term.coeff), isDelocalized ? 0.58 : 0.72) *
+              scaleMult *
+              delocBoost;
+            const isPositiveCoeff = term.coeff >= 0;
+            const primaryMat = isPositiveCoeff ? posMat : negMat;
+            const oppositeMat = isPositiveCoeff ? negMat : posMat;
+
+            const atomOrigin = new THREE.Vector3(atom.x3d, atom.y3d, atom.z3d);
+
+            if (term.orbital === 's') {
+              const sMesh = new THREE.Mesh(sharedUnitSphereGeo, primaryMat);
+              sMesh.position.copy(atomOrigin);
+              sMesh.scale.setScalar(0.95 * weight);
+              sMesh.renderOrder = 3;
+              lobeGroup.add(sMesh);
+            } else if (
+              term.orbital === 'px' ||
+              term.orbital === 'py' ||
+              term.orbital === 'pz'
+            ) {
+              const axisVec =
+                term.orbital === 'px'
+                  ? new THREE.Vector3(1, 0, 0)
+                  : term.orbital === 'py'
+                    ? new THREE.Vector3(0, 1, 0)
+                    : new THREE.Vector3(0, 0, 1);
+
+              const posLobe = new THREE.Mesh(sharedLobeGeo, primaryMat);
+              posLobe.position.copy(atomOrigin);
+              posLobe.quaternion.setFromUnitVectors(vUp, axisVec);
+              posLobe.scale.setScalar(0.95 * weight);
+              posLobe.renderOrder = 3;
+              lobeGroup.add(posLobe);
+
+              const negLobe = new THREE.Mesh(sharedLobeGeo, oppositeMat);
+              negLobe.position.copy(atomOrigin);
+              negLobe.quaternion.setFromUnitVectors(vUp, axisVec.clone().negate());
+              negLobe.scale.setScalar(0.95 * weight);
+              negLobe.renderOrder = 3;
+              lobeGroup.add(negLobe);
+            } else {
+              const addDirectedLobe = (
+                dx: number,
+                dy: number,
+                dz: number,
+                mat: THREE.Material,
+                scaleFactor = 0.86
+              ) => {
+                const lobe = new THREE.Mesh(sharedLobeGeo, mat);
+                lobe.position.copy(atomOrigin);
+                const dir = new THREE.Vector3(dx, dy, dz).normalize();
+                lobe.quaternion.setFromUnitVectors(vUp, dir);
+                lobe.scale.setScalar(scaleFactor * weight);
+                lobe.renderOrder = 3;
+                lobeGroup.add(lobe);
+              };
+
+              if (term.orbital === 'dz2') {
+                addDirectedLobe(0, 0, 1, primaryMat, 1.02);
+                addDirectedLobe(0, 0, -1, primaryMat, 1.02);
+                const torusBelly = new THREE.Mesh(
+                  new THREE.TorusGeometry(0.55 * weight, 0.19 * weight, 14, 28),
+                  oppositeMat
+                );
+                torusBelly.position.copy(atomOrigin);
+                torusBelly.renderOrder = 3;
+                lobeGroup.add(torusBelly);
+              } else if (term.orbital === 'dx2y2') {
+                addDirectedLobe(1, 0, 0, primaryMat, 0.9);
+                addDirectedLobe(-1, 0, 0, primaryMat, 0.9);
+                addDirectedLobe(0, 1, 0, oppositeMat, 0.9);
+                addDirectedLobe(0, -1, 0, oppositeMat, 0.9);
+              } else if (term.orbital === 'dxy') {
+                addDirectedLobe(1, 1, 0, primaryMat, 0.9);
+                addDirectedLobe(-1, -1, 0, primaryMat, 0.9);
+                addDirectedLobe(1, -1, 0, oppositeMat, 0.9);
+                addDirectedLobe(-1, 1, 0, oppositeMat, 0.9);
+              } else if (term.orbital === 'dxz') {
+                addDirectedLobe(1, 0, 1, primaryMat, 0.9);
+                addDirectedLobe(-1, 0, -1, primaryMat, 0.9);
+                addDirectedLobe(1, 0, -1, oppositeMat, 0.9);
+                addDirectedLobe(-1, 0, 1, oppositeMat, 0.9);
+              } else if (term.orbital === 'dyz') {
+                addDirectedLobe(0, 1, 1, primaryMat, 0.9);
+                addDirectedLobe(0, -1, -1, primaryMat, 0.9);
+                addDirectedLobe(0, 1, -1, oppositeMat, 0.9);
+                addDirectedLobe(0, -1, 1, oppositeMat, 0.9);
+              } else if (term.orbital === 'fz3') {
+                addDirectedLobe(0, 0, 1, primaryMat, 1.04);
+                addDirectedLobe(0, 0, -1, primaryMat, 1.04);
+                const collarGeo = new THREE.TorusGeometry(0.52 * weight, 0.15 * weight, 12, 26);
+                const topCollar = new THREE.Mesh(collarGeo, oppositeMat);
+                topCollar.position.copy(atomOrigin).add(new THREE.Vector3(0, 0, 0.34 * weight));
+                topCollar.renderOrder = 3;
+                lobeGroup.add(topCollar);
+                const botCollar = new THREE.Mesh(collarGeo, primaryMat);
+                botCollar.position.copy(atomOrigin).add(new THREE.Vector3(0, 0, -0.34 * weight));
+                botCollar.renderOrder = 3;
+                lobeGroup.add(botCollar);
+              } else if (term.orbital === 'fxyz') {
+                for (const sx of [-1, 1]) {
+                  for (const sy of [-1, 1]) {
+                    for (const sz of [-1, 1]) {
+                      addDirectedLobe(
+                        sx,
+                        sy,
+                        sz,
+                        sx * sy * sz > 0 ? primaryMat : oppositeMat,
+                        0.82
+                      );
+                    }
+                  }
+                }
+              } else if (term.orbital === 'fz_x2y2') {
+                for (const sz of [-1, 1]) {
+                  addDirectedLobe(1, 0, sz, sz > 0 ? primaryMat : oppositeMat, 0.82);
+                  addDirectedLobe(-1, 0, sz, sz > 0 ? primaryMat : oppositeMat, 0.82);
+                  addDirectedLobe(0, 1, sz, sz > 0 ? oppositeMat : primaryMat, 0.82);
+                  addDirectedLobe(0, -1, sz, sz > 0 ? oppositeMat : primaryMat, 0.82);
+                }
+              } else if (term.orbital === 'fx_x2_3y2' || term.orbital === 'fy_3x2_y2') {
+                const offset = term.orbital === 'fy_3x2_y2' ? Math.PI / 6 : 0;
+                for (let k = 0; k < 6; k++) {
+                  const phi = offset + (k * Math.PI) / 3;
+                  addDirectedLobe(
+                    Math.cos(phi),
+                    Math.sin(phi),
+                    0,
+                    k % 2 === 0 ? primaryMat : oppositeMat,
+                    0.84
+                  );
+                }
+              } else if (term.orbital === 'fxz2' || term.orbital === 'fyz2') {
+                const isX = term.orbital === 'fxz2';
+                for (let k = 0; k < 6; k++) {
+                  const theta = (k * Math.PI) / 3;
+                  const c = Math.cos(theta);
+                  const s = Math.sin(theta);
+                  addDirectedLobe(
+                    isX ? c : 0,
+                    isX ? 0 : c,
+                    s,
+                    k % 2 === 0 ? primaryMat : oppositeMat,
+                    0.84
+                  );
+                }
+              }
+            }
+          }
+          contentGroup.add(lobeGroup);
+        } else {
+          const kf = getMorphKeyframe(mo, atomList, scaleMult, tProgress);
+          const posMesh = new THREE.Mesh(kf.posGeo, posMat);
+          posMesh.renderOrder = 3;
+          const negMesh = new THREE.Mesh(kf.negGeo, negMat);
+          negMesh.renderOrder = 3;
+          activePosMesh = posMesh;
+          activeNegMesh = negMesh;
+          contentGroup.add(posMesh, negMesh);
+        }
 
         // Optional Nodal Planes in MO mode
         if (showNodes && mo.nodalPlanes > 0) {
@@ -1108,6 +1309,8 @@ export const OrbitalVisualizer3DV3: React.FC<OrbitalVisualizer3DV3Props> = ({
       controls.dispose();
       disposeContentGroup();
       clearMorphCache();
+      sharedUnitSphereGeo.dispose();
+      sharedLobeGeo.dispose();
       shadowGeo.dispose();
       shadowMat.dispose();
       ringGeo.dispose();
@@ -1135,6 +1338,7 @@ export const OrbitalVisualizer3DV3: React.FC<OrbitalVisualizer3DV3Props> = ({
     lobeScale,
     orbitalOpacity,
     renderMode,
+    showLcaoLobes,
     showSymmetryElements,
     showNodalPlanes,
     showChargeLabels,
@@ -1202,12 +1406,18 @@ export const OrbitalVisualizer3DV3: React.FC<OrbitalVisualizer3DV3Props> = ({
 
       {/* Main 3D Viewport Stage */}
       <div className="relative flex-1 min-h-0 bg-[#0b0f19]">
-        <div ref={canvasMountRef} className="w-full h-full" />
+        <div
+          ref={canvasMountRef}
+          className="w-full h-full"
+          data-testid="orbital-3d-canvas-v3"
+          data-field-mode={fieldMode}
+          data-render-mode={showLcaoLobes && fieldMode === 'mo' ? 'lobes' : renderMode}
+        />
 
         {/* Top-Left Compact Telemetry Overlay (Solid high-contrast, no backdrop-blur) */}
-        <div className="absolute top-2.5 left-2.5 pointer-events-none flex flex-col gap-1 max-w-[65%]">
+        <div className="absolute top-2.5 left-2.5 pointer-events-none flex flex-col gap-1 max-w-[calc(100%-168px)]">
           <div
-            className={`px-2.5 py-1 rounded text-[11px] font-mono border ${
+            className={`px-2.5 py-1 rounded text-[11px] font-mono border truncate ${
               darkStage
                 ? 'bg-slate-950/90 text-slate-100 border-slate-700'
                 : 'bg-white/95 text-slate-900 border-slate-300'
@@ -1435,11 +1645,11 @@ export const OrbitalVisualizer3DV3: React.FC<OrbitalVisualizer3DV3Props> = ({
         </div>
       )}
 
-      {/* Compact Bottom Controls Bar (AO->MO Morph + Collapsible Display Options) */}
+      {/* Compact Bottom Controls Bar (AO->MO Morph / LCAO Lobes + Collapsible Display Options) */}
       <div className="px-3 py-2 bg-white border-t border-slate-200 space-y-2">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          {fieldMode === 'mo' ? (
-            <div className="flex items-center gap-1.5 flex-1 min-w-[160px]">
+        <div className="flex flex-wrap items-center justify-between gap-1.5">
+          {fieldMode === 'mo' && !showLcaoLobes ? (
+            <div className="flex items-center gap-1.5 flex-1 min-w-[140px]">
               <button
                 type="button"
                 onClick={handleTogglePlayMorph}
@@ -1456,27 +1666,52 @@ export const OrbitalVisualizer3DV3: React.FC<OrbitalVisualizer3DV3Props> = ({
                 step={0.025}
                 value={morphProgress}
                 onChange={(e) => handleScrubMorph(Number(e.target.value))}
-                className="flex-1 accent-blue-600"
+                className="flex-1 min-w-[56px] accent-blue-600"
               />
               <span className="text-[11px] font-mono text-slate-600 tabular-nums w-8 text-right">
                 {Math.round(morphProgress * 100)}%
               </span>
             </div>
           ) : (
-            <div className="flex items-center gap-2 flex-1 min-w-[160px] text-[11px] font-mono text-slate-600">
-              <span>Iso Scale:</span>
+            <div className="flex items-center gap-1.5 flex-1 min-w-[140px] text-[11px] font-mono text-slate-600">
+              <span className="whitespace-nowrap">
+                {fieldMode === 'mo' && showLcaoLobes ? 'Lobe Scale:' : 'Iso Scale:'}
+              </span>
               <input
                 type="range"
-                aria-label="Volumetric isosurface scale"
+                aria-label={
+                  fieldMode === 'mo' && showLcaoLobes
+                    ? 'LCAO lobe scale'
+                    : 'Volumetric isosurface scale'
+                }
                 min={0.5}
                 max={1.6}
                 step={0.05}
                 value={lobeScale}
                 onChange={(e) => setLobeScale(Number(e.target.value))}
-                className="flex-1 accent-blue-600 max-w-[140px]"
+                className="flex-1 min-w-[56px] accent-blue-600 max-w-[130px]"
               />
               <span className="tabular-nums">{lobeScale.toFixed(2)}×</span>
             </div>
+          )}
+
+          {fieldMode === 'mo' && (
+            <button
+              type="button"
+              data-testid="toggle-lcao-lobes"
+              onClick={() => {
+                setIsMorphPlaying(false);
+                setShowLcaoLobes((prev) => !prev);
+              }}
+              title="Toggle discrete atomic-orbital LCAO Lobes representation"
+              className={`px-2 py-1 text-[11px] font-medium rounded border transition-colors whitespace-nowrap shrink-0 ${
+                showLcaoLobes
+                  ? 'bg-blue-600 text-white border-blue-600 hover:bg-blue-700'
+                  : 'text-slate-700 bg-slate-100 border-slate-200 hover:bg-slate-200'
+              }`}
+            >
+              LCAO Lobes
+            </button>
           )}
 
           <button
@@ -1505,8 +1740,9 @@ export const OrbitalVisualizer3DV3: React.FC<OrbitalVisualizer3DV3Props> = ({
             </label>
 
             <label className="flex items-center justify-between gap-2">
-              <span className="font-mono text-slate-500">Mesh</span>
+              <span className="font-mono text-slate-500">Style</span>
               <select
+                data-testid="render-style-select"
                 value={renderMode}
                 onChange={(e) => setRenderMode(e.target.value as 'merged' | 'wireframe')}
                 className="text-[11px] font-mono bg-slate-50 border border-slate-200 rounded px-1.5 py-0.5"
